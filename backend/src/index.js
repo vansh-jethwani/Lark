@@ -7,6 +7,7 @@ import dbConnect from "./lib/db.js";
 import User from "./models/user.model.js";
 import Message from "./models/message.model.js";
 import { clerkMiddleware } from "@clerk/express";
+import job from "./lib/cron.js";
 
 dotenv.config();
 const PORT = process.env.PORT;
@@ -39,4 +40,8 @@ if (fs.existsSync(publicDir)) {
 app.listen(PORT, () => {
     dbConnect();
     console.log(`Server started on port ${PORT}`);
+
+    if(process.env.NODE_ENV === "production"){
+        job.start();
+    }
 });
