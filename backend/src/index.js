@@ -3,9 +3,9 @@ import dotenv from "dotenv";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
-import dbConnect from "./src/lib/db.js";
-import User from "./src/models/user.model.js";
-import Message from "./src/models/message.model.js";
+import dbConnect from "./lib/db.js";
+import User from "./models/user.model.js";
+import Message from "./models/message.model.js";
 import { clerkMiddleware } from "@clerk/express";
 
 dotenv.config();
@@ -17,7 +17,8 @@ const publicDir = path.join(process.cwd(), 'public')
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: [frontendURL, Credential = true]
+    origin: frontendURL,
+    credentials: true
 }));
 app.use(clerkMiddleware());
 
