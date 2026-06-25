@@ -1,9 +1,9 @@
 import { Show, SignInButton, SignUpButton, UserButton } from '@clerk/react'
 import { Button } from '@heroui/react';
-import { ThemeProvider } from './context/themeContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { WallpaperProvider } from './context/WallpaperContext';
 import { Routes, Route, Navigate } from 'react-router';
-import ChatPage from './pages/chatPage';
+import ChatPage from './pages/ChatPage';
 import AuthPage from './pages/AuthPage';
 import { useAuth } from '@clerk/react';
 import PageLoader from './components/PageLoader';
