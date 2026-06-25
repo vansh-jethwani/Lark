@@ -1,7 +1,7 @@
 import { getAuth } from "@clerk/express";
 import User from "../models/user.model.js";
 
-export async function protectRoute(req, res, next){
+export default async function protectRoute(req, res, next){
     try{
        const { userId } = getAuth(req);
 

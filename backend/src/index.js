@@ -10,6 +10,7 @@ import { clerkMiddleware } from "@clerk/express";
 import job from "./lib/cron.js";
 import clerkWebhook from "./webhooks/clerk.webhooks.js";
 import authRoutes from "./routes/auth.routes.js";
+import messageRoutes from "./routes/message.routes.js";
 
 dotenv.config();
 const PORT = process.env.PORT;
@@ -34,6 +35,7 @@ app.get("/ping", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/messages", messageRoutes);
 
 // if the public directory exists, serve the static files
 // this is for the production build
