@@ -11,14 +11,15 @@ import job from "./lib/cron.js";
 import clerkWebhook from "./webhooks/clerk.webhooks.js";
 import authRoutes from "./routes/auth.routes.js";
 import messageRoutes from "./routes/message.routes.js";
+import {app, server} from "./lib/socket.js"
 
 dotenv.config();
 const PORT = process.env.PORT;
 const frontendURL = process.env.FRONTEND_URL;
 
-const publicDir = path.join(process.cwd(), 'public')
 
-const app = express();
+// learn
+const publicDir = path.join(process.cwd(), 'public')
 
 // it's important that you don't parse the webhook event data, it should be in the raw format
 app.use("/api/webhooks/clerk", express.raw({ type: "application/json" }), clerkWebhook);
@@ -47,7 +48,7 @@ if (fs.existsSync(publicDir)) {
     });
 }
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     dbConnect();
     console.log(`Server started on port ${PORT}`);
 
