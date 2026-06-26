@@ -5,7 +5,7 @@ import { useAuthStore } from "../store/useAuthStore";
 
 // John Doe -> JD
 export function getInitials(name) {
-  return name
+  return String(name || "")
     .split(" ")
     .filter(Boolean)
     .map((namePart) => namePart[0])
@@ -19,7 +19,7 @@ export function getInitials(name) {
 // 2. User → peer
 
 function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
-  const mappedMessages = messages.map((message) => ({
+  const mappedMessages = (Array.isArray(messages) ? messages : []).map((message) => ({
     id: message._id,
     role: String(message.senderId) === String(authUser?._id) ? "me" : "them",
     text: message.text || "",

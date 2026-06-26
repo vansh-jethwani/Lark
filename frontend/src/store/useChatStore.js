@@ -5,6 +5,8 @@ import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 import toast from "react-hot-toast";
 
+const asArray = (value) => (Array.isArray(value) ? value : []);
+
 export const useChatStore = create(
   persist(
     (set, get) => ({
@@ -26,10 +28,11 @@ export const useChatStore = create(
         set({ isUsersLoading: true });
         try {
           const res = await axiosInstance.get("/messages/users");
+          const users = asArray(res.data);
           set((state) => ({
-            users: res.data,
+            users,
             selectedUser:
-              state.selectedUser && res.data.some((user) => user._id === state.selectedUser._id)
+              state.selectedUser && users.some((user) => user._id === state.selectedUser._id)
                 ? state.selectedUser
                 : null,
           }));
@@ -44,7 +47,7 @@ export const useChatStore = create(
         set({ isConversationsLoading: true });
         try {
           const res = await axiosInstance.get("/messages/conversations");
-          set({ conversations: res.data });
+          set({ conversations: asArray(res.data) });
         } catch (error) {
           console.log("Error in getConversations", error.message);
         } finally {
@@ -54,14 +57,21 @@ export const useChatStore = create(
 
       getMessages: async (userId) => {
         if (!userId) return;
-        set({ isMessagesLoading: true });
+        set({ isMessagesLoading: true, messages: [] });
         try {
           const res = await axiosInstance.get(`/messages/${userId}`);
-          set({ messages: res.data });
+          if (get().activeConversationId === userId) {
+            set({ messages: asArray(res.data) });
+          }
         } catch (error) {
+          if (get().activeConversationId === userId) {
+            set({ messages: [] });
+          }
           toast.error(error.response?.data?.message || "Failed to load messages");
         } finally {
-          set({ isMessagesLoading: false });
+          if (get().activeConversationId === userId) {
+            set({ isMessagesLoading: false });
+          }
         }
       },
 
@@ -71,7 +81,7 @@ export const useChatStore = create(
 
         try {
           const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
-          set({ messages: [...messages, res.data], composerText: "" });
+          set({ messages: [...asArray(messages), res.data], composerText: "" });
           get().getConversations();
           return true;
         } catch (error) {
@@ -91,7 +101,7 @@ export const useChatStore = create(
           // if im not the receiver don't do anything just return
           if (String(newMessage.senderId) !== String(userId)) return;
 
-          set({ messages: [...get().messages, newMessage] });
+          set({ messages: [...asArray(get().messages), newMessage] });
 
           get().getConversations();
         });
@@ -111,7 +121,7 @@ export const useChatStore = create(
             state.users.find((user) => user._id === activeConversationId) ||
             state.conversations.find((user) => user._id === activeConversationId) ||
             null,
-          messages: activeConversationId ? state.messages : [],
+          messages: [],
         }));
       },
 
