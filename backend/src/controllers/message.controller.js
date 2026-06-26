@@ -80,7 +80,7 @@ export async function sendMessage(req, res) {
         let imageUrl;
         let videoUrl;
 
-        if(req.file){
+        if(req.files){
             if(!hasImagekitConfig()){
                 return res.status(503).json({error: "Media upload not configured"})
             }
@@ -99,7 +99,6 @@ export async function sendMessage(req, res) {
             senderId,
             receiverId,
             text,
-            messageType,
             image: imageUrl || "",
             video: videoUrl || "",
         });
@@ -109,7 +108,7 @@ export async function sendMessage(req, res) {
         const receiverSocketId = getReceiverSocketId(receiverId);
         // only send the message in realtime if user is online
         if(receiverSocketId){
-            io.to(receiverSocketId).emit("getNewMessage", newMessage);
+            io.to(receiverSocketId).emit("newMessage", newMessage);
         }
 
         res.status(201).json(newMessage);

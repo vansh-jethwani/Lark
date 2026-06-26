@@ -15,9 +15,11 @@ const messageSchema = new mongoose.Schema({
         type: String,
         default: ""
     },
-    isRead: {
-        type: Boolean,
-        default: false
+    image: {
+      type: String,
+    },
+    video: {
+      type: String,
     }
 }, { timestamps: true });
 
