@@ -6,7 +6,8 @@
   "scripts": {
     "build": "rimraf dist && copyfiles -u 1 \"src/**/*\" dist",
     "dev": "nodemon src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "seed-users": "node src/seeds/user.seed.js"
   },
   "keywords": [],
   "author": "",

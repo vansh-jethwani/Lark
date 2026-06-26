@@ -15,6 +15,7 @@ export default async function protectRoute(req, res, next){
        }
 
        req.user = user
+       req.userId = user._id
        next()
     }catch(error){
         console.error("Error in auth.middleware:", error.message);

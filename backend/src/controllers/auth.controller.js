@@ -1,5 +1,5 @@
 export async function checkAuth(req, res, next) {
-    if(!res.user){
+    if(!req.user){
         return res.status(401).json({message: "Unauthorized"})
     }
 
