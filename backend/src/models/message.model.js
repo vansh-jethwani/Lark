@@ -11,9 +11,9 @@ const messageSchema = new mongoose.Schema({
         ref: "User",
         required: true
     },
-    content: {
+    text: {
         type: String,
-        required: true
+        default: ""
     },
     isRead: {
         type: Boolean,
