@@ -80,7 +80,7 @@ export async function sendMessage(req, res) {
         let imageUrl;
         let videoUrl;
 
-        if(req.files){
+        if(req.file){
             if(!hasImagekitConfig()){
                 return res.status(503).json({error: "Media upload not configured"})
             }
@@ -90,7 +90,7 @@ export async function sendMessage(req, res) {
             if(req.file.mimetype.startsWith("image")){
                 imageUrl = url;
             }
-            if(req.file.mimetype.startsWith("video")){
+            else{
                 videoUrl = url;
             }            
         }
