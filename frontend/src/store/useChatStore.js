@@ -98,8 +98,17 @@ export const useChatStore = create(
 
         socket.off("newMessage");
         socket.on("newMessage", (newMessage) => {
-          // if im not the receiver don't do anything just return
-          if (String(newMessage.senderId) !== String(userId)) return;
+          const isActiveConversationMessage =
+            String(newMessage.senderId) === String(userId) ||
+            String(newMessage.receiverId) === String(userId);
+
+          if (!isActiveConversationMessage) return;
+
+          const hasMessage = asArray(get().messages).some(
+            (message) => String(message._id) === String(newMessage._id),
+          );
+
+          if (hasMessage) return;
 
           set({ messages: [...asArray(get().messages), newMessage] });
 

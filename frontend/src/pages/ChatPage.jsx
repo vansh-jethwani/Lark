@@ -1,4 +1,5 @@
 import { useWallpaper } from "../context/wallpaper";
+import { useAuthStore } from "../store/useAuthStore";
 import { useChatStore } from "../store/useChatStore";
 import { useSelectedConversation } from "../hooks/useSelectedConversation";
 import { useEffect } from "react";
@@ -15,6 +16,7 @@ function ChatPage() {
   const getUsers = useChatStore((state) => state.getUsers);
   const subscribeToMessages = useChatStore((state) => state.subscribeToMessages);
   const unsubscribeFromMessages = useChatStore((state) => state.unsubscribeFromMessages);
+  const socket = useAuthStore((state) => state.socket);
 
   const { activeConversation, activeConversationId, isLargeScreen } = useSelectedConversation();
 
@@ -31,7 +33,7 @@ function ChatPage() {
 
     // cleanup
     return () => unsubscribeFromMessages();
-  }, [getMessages, activeConversationId, subscribeToMessages, unsubscribeFromMessages]);
+  }, [getMessages, activeConversationId, socket, subscribeToMessages, unsubscribeFromMessages]);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden p-2 sm:p-3 md:p-8" style={frameStyle}>
