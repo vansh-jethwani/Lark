@@ -27,10 +27,25 @@ router.post("/", async (req, res) => {
             const fullName =
                 [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || email?.split("@")[0];
 
+            const username =
+                u.username ||
+                email.split("@")[0];
+
             await User.findOneAndUpdate(
                 { clerkId: u.id },
-                { clerkId: u.id, email, fullName, profilePic: u.image_url },
-                { new: true, upsert: true, setDefaultsOnInsert: true },
+                {
+                    clerkId: u.id,
+                    email,
+                    fullName,
+                    username,
+                    profilePic: u.image_url,
+                },
+                {
+                    new: true,
+                    upsert: true,
+                    runValidators: true,
+                    setDefaultsOnInsert: true,
+                }
             );
             return res.status(200).json({ received: true });
         }
