@@ -76,18 +76,19 @@ export async function sendMessage(req, res) {
         const { text } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
+        const mediaFile = req.file || req.files?.media?.[0];
 
         let imageUrl;
         let videoUrl;
 
-        if(req.file){
+        if(mediaFile){
             if(!hasImagekitConfig()){
                 return res.status(503).json({error: "Media upload not configured"})
             }
 
-            const url = await uploadChatMedia(req.file);
+            const url = await uploadChatMedia(mediaFile);
 
-            if(req.file.mimetype.startsWith("image")){
+            if(mediaFile.mimetype.startsWith("image")){
                 imageUrl = url;
             }
             else{
