@@ -8,14 +8,27 @@ import { SearchField, Tabs } from "@heroui/react";
 import { MessageSquareIcon, UsersIcon } from "lucide-react";
 import { ConversationRow } from "./ConversationRow";
 
+function getLastMessagePreview(message) {
+  if (!message) return "";
+  if (message.text) return message.text;
+  if (message.image) return "Photo";
+  if (message.video) return "Video";
+  if (message.file) return message.fileName || "Document";
+  return "";
+}
+
 function mapUserForList(user, onlineUsers) {
   return {
     conversationId: user._id,
     id: user._id,
     name: user.fullName,
+    email: user.email,
     avatarUrl: user.profilePic,
     initials: getInitials(user.fullName),
     isOnline: onlineUsers.includes(user._id),
+    lastMessagePreview: getLastMessagePreview(user.lastMessage),
+    lastMessageAt: user.lastMessageAt,
+    unreadCount: Number(user.unreadCount || 0),
     peer: {
       name: user.fullName,
       avatarUrl: user.profilePic,

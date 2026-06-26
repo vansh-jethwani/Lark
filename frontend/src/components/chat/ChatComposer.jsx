@@ -1,5 +1,5 @@
 import { Button, TextArea } from "@heroui/react";
-import { ImageIcon, LoaderIcon, SendHorizontalIcon } from "lucide-react";
+import { PaperclipIcon, LoaderIcon, SendHorizontalIcon } from "lucide-react";
 import { useRef } from "react";
 import useKeyboardSound from "../../hooks/useKeyboardSound";
 import { useChatStore } from "../../store/useChatStore";
@@ -59,7 +59,7 @@ export function ChatComposer() {
         <input
           ref={mediaInputRef}
           type="file"
-          accept="image/*,video/*"
+          accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,.csv"
           className="sr-only"
           disabled={isSendingMedia}
           tabIndex={-1}
@@ -73,7 +73,7 @@ export function ChatComposer() {
           className="size-9 shrink-0 touch-manipulation self-end text-accent"
           onPress={() => mediaInputRef.current?.click()}
         >
-          <ImageIcon className="size-5 sm:size-6" strokeWidth={2} />
+          <PaperclipIcon className="size-5 sm:size-6" strokeWidth={2} />
         </Button>
         <TextArea
           fullWidth

@@ -15,7 +15,7 @@ import {app, server} from "./lib/socket.js"
 
 dotenv.config();
 const PORT = process.env.PORT;
-const frontendURL = process.env.FRONTEND_URL;
+const frontendURL = process.env.FRONTEND_URL?.replace(/\/$/, "");
 
 
 // learn

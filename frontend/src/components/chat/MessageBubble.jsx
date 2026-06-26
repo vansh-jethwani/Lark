@@ -1,3 +1,4 @@
+import { CheckCheckIcon, CheckIcon, FileTextIcon } from "lucide-react";
 import { withTransform } from "../../lib/imagekit";
 import { MessageVideo } from "./MessageVideo";
 
@@ -8,6 +9,9 @@ export function MessageBubble({ message }) {
   const isOwnMessage = message.role === "me";
   const hasImage = Boolean(message.imageUrl);
   const hasVideo = Boolean(message.videoUrl);
+  const hasFile = Boolean(message.fileUrl);
+  const statusLabel = message.readAt ? "Read" : message.deliveredAt ? "Delivered" : "Sent";
+  const StatusIcon = message.deliveredAt || message.readAt ? CheckCheckIcon : CheckIcon;
 
   return (
     <div className={`flex w-full ${isOwnMessage ? "justify-end" : "justify-start"}`}>
@@ -26,15 +30,36 @@ export function MessageBubble({ message }) {
           />
         ) : null}
         {hasVideo ? <MessageVideo src={message.videoUrl} /> : null}
+        {hasFile ? (
+          <a
+            href={message.fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            className={`mb-1.5 flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${
+              isOwnMessage
+                ? "border-accent-foreground/20 bg-accent-foreground/10"
+                : "border-border bg-background"
+            }`}
+          >
+            <FileTextIcon className="size-5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1 truncate">{message.fileName || "Document"}</span>
+          </a>
+        ) : null}
         {message.text ? (
           <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
         ) : null}
         <p
-          className={`mt-1 text-[11px] tabular-nums ${
+          className={`mt-1 flex items-center justify-end gap-1 text-[11px] tabular-nums ${
             isOwnMessage ? "text-accent-foreground/75" : "text-muted"
           }`}
         >
-          {message.time}
+          <span>{message.time}</span>
+          {isOwnMessage ? (
+            <StatusIcon
+              className={`size-3.5 ${message.readAt ? "text-sky-300" : ""}`}
+              aria-label={statusLabel}
+            />
+          ) : null}
         </p>
       </div>
     </div>

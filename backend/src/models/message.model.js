@@ -20,7 +20,31 @@ const messageSchema = new mongoose.Schema({
     },
     video: {
       type: String,
-    }
+    },
+    file: {
+      type: String,
+      default: "",
+    },
+    fileName: {
+      type: String,
+      default: "",
+    },
+    fileType: {
+      type: String,
+      default: "",
+    },
+    fileSize: {
+      type: Number,
+      default: 0,
+    },
+    deliveredAt: {
+      type: Date,
+      default: null,
+    },
+    readAt: {
+      type: Date,
+      default: null,
+    },
 }, { timestamps: true });
 
 const Message = mongoose.model("Message", messageSchema);

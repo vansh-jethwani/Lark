@@ -6,6 +6,40 @@ import { useAuthStore } from "./useAuthStore";
 import toast from "react-hot-toast";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
+const getMessagePartnerId = (message, authUserId) =>
+  String(message.senderId) === String(authUserId) ? String(message.receiverId) : String(message.senderId);
+
+function sortConversations(conversations) {
+  return [...asArray(conversations)].sort(
+    (a, b) => new Date(b.lastMessageAt || b.updatedAt || 0) - new Date(a.lastMessageAt || a.updatedAt || 0),
+  );
+}
+
+function upsertConversation(conversations, partner, lastMessage, unreadCount) {
+  if (!partner?._id) return sortConversations(conversations);
+
+  const existing = asArray(conversations).find((conversation) => conversation._id === partner._id);
+  const nextConversation = {
+    ...(existing || partner),
+    ...partner,
+    unreadCount,
+    lastMessage,
+    lastMessageAt: lastMessage?.createdAt || existing?.lastMessageAt || new Date().toISOString(),
+  };
+
+  return sortConversations([
+    nextConversation,
+    ...asArray(conversations).filter((conversation) => conversation._id !== partner._id),
+  ]);
+}
+
+function updateConversation(conversations, conversationId, updater) {
+  return sortConversations(
+    asArray(conversations).map((conversation) =>
+      conversation._id === conversationId ? updater(conversation) : conversation,
+    ),
+  );
+}
 
 export const useChatStore = create(
   persist(
@@ -47,7 +81,7 @@ export const useChatStore = create(
         set({ isConversationsLoading: true });
         try {
           const res = await axiosInstance.get("/messages/conversations");
-          set({ conversations: asArray(res.data) });
+          set({ conversations: sortConversations(res.data) });
         } catch (error) {
           console.log("Error in getConversations", error.message);
         } finally {
@@ -61,7 +95,13 @@ export const useChatStore = create(
         try {
           const res = await axiosInstance.get(`/messages/${userId}`);
           if (get().activeConversationId === userId) {
-            set({ messages: asArray(res.data) });
+            set((state) => ({
+              messages: asArray(res.data),
+              conversations: updateConversation(state.conversations, userId, (conversation) => ({
+                ...conversation,
+                unreadCount: 0,
+              })),
+            }));
           }
         } catch (error) {
           if (get().activeConversationId === userId) {
@@ -76,13 +116,20 @@ export const useChatStore = create(
       },
 
       sendMessage: async (messageData) => {
-        const { selectedUser, messages } = get();
+        const { selectedUser } = get();
         if (!selectedUser) return false;
 
         try {
           const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
-          set({ messages: [...asArray(messages), res.data], composerText: "" });
-          get().getConversations();
+          set((state) => ({
+            messages: asArray(state.messages).some(
+              (message) => String(message._id) === String(res.data._id),
+            )
+              ? state.messages
+              : [...asArray(state.messages), res.data],
+            composerText: "",
+            conversations: upsertConversation(state.conversations, selectedUser, res.data, 0),
+          }));
           return true;
         } catch (error) {
           toast.error(error.response?.data?.message || "Failed to send message");
@@ -90,35 +137,87 @@ export const useChatStore = create(
         }
       },
 
-      subscribeToMessages: (userId) => {
-        if (!userId) return;
-
+      subscribeToChatEvents: () => {
         const socket = useAuthStore.getState().socket;
         if (!socket) return;
 
         socket.off("newMessage");
-        socket.on("newMessage", (newMessage) => {
-          const isActiveConversationMessage =
-            String(newMessage.senderId) === String(userId) ||
-            String(newMessage.receiverId) === String(userId);
+        socket.off("messagesRead");
+        socket.off("conversationRead");
 
-          if (!isActiveConversationMessage) return;
+        socket.on("newMessage", async (newMessage) => {
+          const authUser = useAuthStore.getState().authUser;
+          const authUserId = authUser?._id;
+          if (!authUserId) return;
 
-          const hasMessage = asArray(get().messages).some(
-            (message) => String(message._id) === String(newMessage._id),
-          );
+          const partnerId = getMessagePartnerId(newMessage, authUserId);
+          const isActiveConversation = String(get().activeConversationId) === partnerId;
+          const isIncoming = String(newMessage.senderId) !== String(authUserId);
 
-          if (hasMessage) return;
+          set((state) => {
+            const partner =
+              state.users.find((user) => user._id === partnerId) ||
+              state.conversations.find((conversation) => conversation._id === partnerId);
+            const hasMessage = asArray(state.messages).some(
+              (message) => String(message._id) === String(newMessage._id),
+            );
+            const existingConversation = state.conversations.find(
+              (conversation) => conversation._id === partnerId,
+            );
+            const unreadCount =
+              isIncoming && !isActiveConversation
+                ? Number(existingConversation?.unreadCount || 0) + 1
+                : 0;
 
-          set({ messages: [...asArray(get().messages), newMessage] });
+            return {
+              messages:
+                isActiveConversation && !hasMessage
+                  ? [...asArray(state.messages), newMessage]
+                  : state.messages,
+              conversations: upsertConversation(state.conversations, partner, newMessage, unreadCount),
+            };
+          });
 
-          get().getConversations();
+          if (isIncoming && isActiveConversation) {
+            await get().markConversationAsRead(partnerId);
+          }
+        });
+
+        socket.on("messagesRead", ({ messageIds, readAt }) => {
+          const readMessageIds = new Set(asArray(messageIds).map((messageId) => String(messageId)));
+
+          set((state) => ({
+            messages: asArray(state.messages).map((message) =>
+              readMessageIds.has(String(message._id)) ? { ...message, readAt } : message,
+            ),
+            conversations: sortConversations(
+              asArray(state.conversations).map((conversation) =>
+                readMessageIds.has(String(conversation.lastMessage?._id))
+                  ? {
+                      ...conversation,
+                      lastMessage: { ...conversation.lastMessage, readAt },
+                    }
+                  : conversation,
+              ),
+            ),
+          }));
+        });
+
+        socket.on("conversationRead", ({ conversationId }) => {
+          set((state) => ({
+            conversations: updateConversation(state.conversations, conversationId, (conversation) => ({
+              ...conversation,
+              unreadCount: 0,
+            })),
+          }));
         });
       },
 
       unsubscribeFromMessages: () => {
         const socket = useAuthStore.getState().socket;
         socket?.off("newMessage");
+        socket?.off("messagesRead");
+        socket?.off("conversationRead");
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -131,6 +230,12 @@ export const useChatStore = create(
             state.conversations.find((user) => user._id === activeConversationId) ||
             null,
           messages: [],
+          conversations: activeConversationId
+            ? updateConversation(state.conversations, activeConversationId, (conversation) => ({
+                ...conversation,
+                unreadCount: 0,
+              }))
+            : state.conversations,
         }));
       },
 
@@ -157,6 +262,23 @@ export const useChatStore = create(
           return await get().sendMessage(formData);
         } finally {
           set({ isSendingMedia: false });
+        }
+      },
+
+      markConversationAsRead: async (conversationId) => {
+        if (!conversationId) return;
+
+        set((state) => ({
+          conversations: updateConversation(state.conversations, conversationId, (conversation) => ({
+            ...conversation,
+            unreadCount: 0,
+          })),
+        }));
+
+        try {
+          await axiosInstance.patch(`/messages/${conversationId}/read`);
+        } catch (error) {
+          console.log("Error in markConversationAsRead", error.message);
         }
       },
     }),

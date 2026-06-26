@@ -14,7 +14,7 @@ function ChatPage() {
   const getConversations = useChatStore((state) => state.getConversations);
   const getMessages = useChatStore((state) => state.getMessages);
   const getUsers = useChatStore((state) => state.getUsers);
-  const subscribeToMessages = useChatStore((state) => state.subscribeToMessages);
+  const subscribeToChatEvents = useChatStore((state) => state.subscribeToChatEvents);
   const unsubscribeFromMessages = useChatStore((state) => state.unsubscribeFromMessages);
   const socket = useAuthStore((state) => state.socket);
 
@@ -29,11 +29,15 @@ function ChatPage() {
     if (!activeConversationId) return;
 
     getMessages(activeConversationId);
-    subscribeToMessages(activeConversationId);
+  }, [getMessages, activeConversationId]);
 
-    // cleanup
+  useEffect(() => {
+    if (!socket) return;
+
+    subscribeToChatEvents();
+
     return () => unsubscribeFromMessages();
-  }, [getMessages, activeConversationId, socket, subscribeToMessages, unsubscribeFromMessages]);
+  }, [socket, subscribeToChatEvents, unsubscribeFromMessages]);
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden p-2 sm:p-3 md:p-8" style={frameStyle}>
