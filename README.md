@@ -28,7 +28,6 @@
 * 🔍 Searchable users and conversations
 * 📱 Fully responsive mobile-friendly UI
 * 🌙 Light/Dark mode with customizable accent themes
-* 🖼️ Custom chat wallpapers
 * 🔊 Keyboard typing sound toggle
 * 🐳 Docker support for production-ready deployment
 
@@ -89,11 +88,11 @@ Lark/
     package.json
 
   frontend/
-    public/             Static assets, sounds, wallpapers
+    public/             Static assets, sounds
     src/
       components/       UI components
-      context/          Theme & wallpaper providers
-      data/             Theme and wallpaper data
+      context/          Theme providers
+      data/             Theme data
       hooks/            Reusable hooks
       lib/              Axios, ImageKit helpers, utilities
       pages/            Authentication & chat pages

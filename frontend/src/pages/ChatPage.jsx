@@ -1,4 +1,3 @@
-import { useWallpaper } from "../context/wallpaper";
 import { useAuthStore } from "../store/useAuthStore";
 import { useChatStore } from "../store/useChatStore";
 import { useSelectedConversation } from "../hooks/useSelectedConversation";
@@ -8,9 +7,9 @@ import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatComposer } from "../components/chat/ChatComposer";
 
-function ChatPage() {
-  const { frameStyle } = useWallpaper();
+import { AI_USER_ID } from "../data/aiUser";
 
+function ChatPage() {
   const getConversations = useChatStore((state) => state.getConversations);
   const getMessages = useChatStore((state) => state.getMessages);
   const getUsers = useChatStore((state) => state.getUsers);
@@ -18,7 +17,8 @@ function ChatPage() {
   const unsubscribeFromMessages = useChatStore((state) => state.unsubscribeFromMessages);
   const socket = useAuthStore((state) => state.socket);
 
-  const { activeConversation, activeConversationId, isLargeScreen } = useSelectedConversation();
+  const { activeConversation, activeConversationId, isLargeScreen } =
+    useSelectedConversation();
 
   useEffect(() => {
     getUsers();
@@ -27,7 +27,6 @@ function ChatPage() {
 
   useEffect(() => {
     if (!activeConversationId) return;
-
     getMessages(activeConversationId);
   }, [getMessages, activeConversationId]);
 
@@ -40,22 +39,22 @@ function ChatPage() {
   }, [socket, subscribeToChatEvents, unsubscribeFromMessages]);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden p-2 sm:p-3 md:p-8" style={frameStyle}>
-      <div className="mx-auto flex w-full max-w-6xl flex-1 overflow-hidden rounded-2xl border border-border bg-background text-foreground">
+    <div className="h-dvh w-screen overflow-hidden bg-background text-foreground">
+      <div className="flex h-full w-full overflow-hidden bg-background">
         <ChatSidebar />
 
-        <div
-          className={`flex-1 flex-col overflow-hidden ${
+        <main
+          className={`flex-1 flex-col overflow-hidden bg-background ${
             !isLargeScreen && !activeConversationId ? "hidden lg:flex" : "flex"
           }`}
         >
           <ChatHeader />
           <MessageList />
-
           {activeConversation ? <ChatComposer /> : null}
-        </div>
+        </main>
       </div>
     </div>
   );
 }
+
 export default ChatPage;

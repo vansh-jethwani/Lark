@@ -5,6 +5,8 @@ import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 import toast from "react-hot-toast";
 
+import { AI_USER, AI_USER_ID } from "../data/aiUser";
+
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const getMessagePartnerId = (message, authUserId) =>
   String(message.senderId) === String(authUserId) ? String(message.receiverId) : String(message.senderId);
@@ -91,6 +93,33 @@ export const useChatStore = create(
 
       getMessages: async (userId) => {
         if (!userId) return;
+
+        if (userId === AI_USER_ID) {
+          set({ isMessagesLoading: true, messages: [] });
+
+          try {
+            const res = await axiosInstance.get("/ai/messages");
+            const authUser = useAuthStore.getState().authUser;
+
+            const aiMessages = asArray(res.data).map((msg) => ({
+              _id: msg._id,
+              senderId: msg.role === "user" ? authUser._id : AI_USER_ID,
+              receiverId: msg.role === "user" ? AI_USER_ID : authUser._id,
+              text: msg.text,
+              createdAt: msg.createdAt,
+            }));
+
+            set({ messages: aiMessages });
+          } catch (error) {
+            toast.error(error.response?.data?.message || "Failed to load AI messages");
+            set({ messages: [] });
+          } finally {
+            set({ isMessagesLoading: false });
+          }
+
+          return;
+        }
+
         set({ isMessagesLoading: true, messages: [] });
         try {
           const res = await axiosInstance.get(`/messages/${userId}`);
@@ -133,6 +162,66 @@ export const useChatStore = create(
           return true;
         } catch (error) {
           toast.error(error.response?.data?.message || "Failed to send message");
+          return false;
+        }
+      },
+
+      sendAIMessage: async () => {
+        const messageText = get().composerText.trim();
+        const authUser = useAuthStore.getState().authUser;
+
+        if (!messageText || !authUser?._id) return false;
+
+        const tempId = `temp-ai-user-${Date.now()}`;
+
+        const tempUserMessage = {
+          _id: tempId,
+          senderId: authUser._id,
+          receiverId: AI_USER_ID,
+          text: messageText,
+          createdAt: new Date().toISOString(),
+        };
+
+        set((state) => ({
+          messages: [...asArray(state.messages), tempUserMessage],
+          composerText: "",
+        }));
+
+        try {
+          const res = await axiosInstance.post("/ai/chat", {
+            message: messageText,
+          });
+
+          const { userMessage, aiMessage } = res.data;
+
+          const mappedUserMessage = {
+            _id: userMessage._id,
+            senderId: authUser._id,
+            receiverId: AI_USER_ID,
+            text: userMessage.text,
+            createdAt: userMessage.createdAt,
+          };
+
+          const mappedAIMessage = {
+            _id: aiMessage._id,
+            senderId: AI_USER_ID,
+            receiverId: authUser._id,
+            text: aiMessage.text,
+            createdAt: aiMessage.createdAt,
+          };
+
+          set((state) => ({
+            messages: [
+              ...asArray(state.messages).filter((msg) => msg._id !== tempId),
+              mappedUserMessage,
+              mappedAIMessage,
+            ],
+            conversations: upsertConversation(state.conversations, AI_USER, mappedAIMessage, 0),
+          }));
+
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to get AI response");
           return false;
         }
       },
@@ -194,9 +283,9 @@ export const useChatStore = create(
               asArray(state.conversations).map((conversation) =>
                 readMessageIds.has(String(conversation.lastMessage?._id))
                   ? {
-                      ...conversation,
-                      lastMessage: { ...conversation.lastMessage, readAt },
-                    }
+                    ...conversation,
+                    lastMessage: { ...conversation.lastMessage, readAt },
+                  }
                   : conversation,
               ),
             ),
@@ -223,20 +312,26 @@ export const useChatStore = create(
       setSelectedUser: (selectedUser) => set({ selectedUser }),
 
       setActiveConversationId: (activeConversationId) => {
-        set((state) => ({
-          activeConversationId,
-          selectedUser:
-            state.users.find((user) => user._id === activeConversationId) ||
-            state.conversations.find((user) => user._id === activeConversationId) ||
-            null,
-          messages: [],
-          conversations: activeConversationId
-            ? updateConversation(state.conversations, activeConversationId, (conversation) => ({
+        set((state) => {
+          const selectedUser =
+            activeConversationId === AI_USER_ID
+              ? AI_USER
+              : state.users.find((user) => user._id === activeConversationId) ||
+              state.conversations.find((user) => user._id === activeConversationId) ||
+              null;
+
+          return {
+            activeConversationId,
+            selectedUser,
+            messages: [],
+            conversations: activeConversationId
+              ? updateConversation(state.conversations, activeConversationId, (conversation) => ({
                 ...conversation,
                 unreadCount: 0,
               }))
-            : state.conversations,
-        }));
+              : state.conversations,
+          };
+        });
       },
 
       setSearchQuery: (searchQuery) => set({ searchQuery }),

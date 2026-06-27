@@ -1,4 +1,3 @@
-import { WallpaperProvider } from "./context/WallpaperContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { Navigate, Route, Routes } from "react-router";
 import ChatPage from "./pages/ChatPage";
@@ -32,7 +31,6 @@ function App() {
 
   return (
     <ThemeProvider>
-      <WallpaperProvider>
         <Routes>
           <Route path="/" element={isSignedIn ? <ChatPage /> : <Navigate to={"/auth"} replace />} />
           <Route
@@ -41,7 +39,6 @@ function App() {
           />
         </Routes>
         <Toaster />
-      </WallpaperProvider>
     </ThemeProvider>
   );
 }

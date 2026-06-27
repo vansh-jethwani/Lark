@@ -12,6 +12,7 @@ import clerkWebhook from "./webhooks/clerk.webhooks.js";
 import authRoutes from "./routes/auth.routes.js";
 import messageRoutes from "./routes/message.routes.js";
 import {app, server} from "./lib/socket.js"
+import aiRoutes from "./routes/ai.routes.js";
 
 dotenv.config();
 const PORT = process.env.PORT;
@@ -37,6 +38,7 @@ app.get("/ping", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/ai", aiRoutes);
 
 // if the public directory exists, serve the static files
 // this is for the production build
