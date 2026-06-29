@@ -16,8 +16,27 @@ const aiMessageSchema = new mongoose.Schema(
 
     text: {
       type: String,
-      required: true,
-      trim: true,
+      default: "",
+    },
+
+    file: {
+      type: String,
+      default: "",
+    },
+
+    fileName: {
+      type: String,
+      default: "",
+    },
+
+    fileType: {
+      type: String,
+      default: "",
+    },
+
+    fileSize: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true }

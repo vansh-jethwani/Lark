@@ -92,10 +92,8 @@ export const useChatStore = create(
       },
 
       getMessages: async (userId) => {
-        if (!userId) return;
-
         if (userId === AI_USER_ID) {
-          set({ isMessagesLoading: true, messages: [] });
+          set({ isMessagesLoading: true }); // do not clear messages here
 
           try {
             const res = await axiosInstance.get("/ai/messages");
@@ -106,13 +104,18 @@ export const useChatStore = create(
               senderId: msg.role === "user" ? authUser._id : AI_USER_ID,
               receiverId: msg.role === "user" ? AI_USER_ID : authUser._id,
               text: msg.text,
+              image: msg.fileType?.startsWith("image/") ? msg.file : "",
+              file: !msg.fileType?.startsWith("image/") ? msg.file : "",
+              fileName: msg.fileName,
+              fileType: msg.fileType,
+              fileSize: msg.fileSize,
               createdAt: msg.createdAt,
             }));
 
             set({ messages: aiMessages });
           } catch (error) {
             toast.error(error.response?.data?.message || "Failed to load AI messages");
-            set({ messages: [] });
+            // do not set messages: [] here
           } finally {
             set({ isMessagesLoading: false });
           }
@@ -166,19 +169,26 @@ export const useChatStore = create(
         }
       },
 
-      sendAIMessage: async () => {
+      sendAIMessage: async ({ file } = {}) => {
         const messageText = get().composerText.trim();
         const authUser = useAuthStore.getState().authUser;
 
-        if (!messageText || !authUser?._id) return false;
+        if (!messageText && !file) return false;
+        if (!authUser?._id) return false;
 
-        const tempId = `temp-ai-user-${Date.now()}`;
+        const tempId = `temp-ai-${Date.now()}`;
+        const isImage = file?.type?.startsWith("image/");
 
         const tempUserMessage = {
           _id: tempId,
           senderId: authUser._id,
           receiverId: AI_USER_ID,
           text: messageText,
+          image: isImage ? URL.createObjectURL(file) : "",
+          file: !isImage && file ? "#" : "",
+          fileName: file?.name || "",
+          fileType: file?.type || "",
+          fileSize: file?.size || 0,
           createdAt: new Date().toISOString(),
         };
 
@@ -188,9 +198,11 @@ export const useChatStore = create(
         }));
 
         try {
-          const res = await axiosInstance.post("/ai/chat", {
-            message: messageText,
-          });
+          const formData = new FormData();
+          formData.append("message", messageText);
+          if (file) formData.append("file", file);
+
+          const res = await axiosInstance.post("/ai/chat", formData);
 
           const { userMessage, aiMessage } = res.data;
 
@@ -199,6 +211,11 @@ export const useChatStore = create(
             senderId: authUser._id,
             receiverId: AI_USER_ID,
             text: userMessage.text,
+            image: userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
+            file: !userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
+            fileName: userMessage.fileName,
+            fileType: userMessage.fileType,
+            fileSize: userMessage.fileSize,
             createdAt: userMessage.createdAt,
           };
 
@@ -323,7 +340,10 @@ export const useChatStore = create(
           return {
             activeConversationId,
             selectedUser,
-            messages: [],
+            messages:
+              activeConversationId === state.activeConversationId
+                ? state.messages
+                : [],
             conversations: activeConversationId
               ? updateConversation(state.conversations, activeConversationId, (conversation) => ({
                 ...conversation,

@@ -37,17 +37,23 @@ export function ChatComposer() {
   };
 
   const handleMediaPick = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
 
-    const didSendMessage = await sendMediaMessage({
-      conversationId: activeConversationId,
-      file,
-    });
-
+  if (activeConversationId === AI_USER_ID) {
+    const didSendMessage = await sendAIMessage({ file });
     if (didSendMessage) playSoundIfEnabled();
-  };
+    return;
+  }
+
+  const didSendMessage = await sendMediaMessage({
+    conversationId: activeConversationId,
+    file,
+  });
+
+  if (didSendMessage) playSoundIfEnabled();
+};
 
   return (
     <footer className="shrink-0 border-t border-border px-1.5 pb-2 pt-2 sm:px-2">
@@ -75,7 +81,7 @@ export function ChatComposer() {
         <Button
           variant="ghost"
           isIconOnly
-          isDisabled={isSendingMedia || activeConversationId === AI_USER_ID}
+          isDisabled={isSendingMedia}
           className="size-9 shrink-0 touch-manipulation self-end text-accent"
           onPress={() => mediaInputRef.current?.click()}
         >
