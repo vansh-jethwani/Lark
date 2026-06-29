@@ -11,9 +11,7 @@ import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
 
 export function ChatHeader() {
-  const isSoundEnabled = useChatStore((state) => state.isSoundEnabled);
   const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
-  const setSoundEnabled = useChatStore((state) => state.setSoundEnabled);
 
   const { activeConversation, isLargeScreen } = useSelectedConversation();
 
@@ -73,21 +71,6 @@ export function ChatHeader() {
         </div>
 
         <ThemeToggle />
-
-        <Button
-          variant="ghost"
-          size="sm"
-          isIconOnly
-          className="shrink-0"
-          aria-pressed={isSoundEnabled}
-          onPress={() => setSoundEnabled(!isSoundEnabled)}
-        >
-          {isSoundEnabled ? (
-            <Volume2Icon className="size-5.5" strokeWidth={2} aria-hidden />
-          ) : (
-            <VolumeXIcon className="size-5.5" strokeWidth={2} aria-hidden />
-          )}
-        </Button>
 
         {activeConversation ? (
           <Button

@@ -57,8 +57,9 @@ export const useChatStore = create(
       searchQuery: "",
       sidebarTab: "chats",
       composerText: "",
-      isSoundEnabled: true,
       isSendingMedia: false,
+      isAIThinking: false,
+      typingUsers: {},
 
       getUsers: async () => {
         set({ isUsersLoading: true });
@@ -195,6 +196,7 @@ export const useChatStore = create(
         set((state) => ({
           messages: [...asArray(state.messages), tempUserMessage],
           composerText: "",
+          isAIThinking: true,
         }));
 
         try {
@@ -233,12 +235,23 @@ export const useChatStore = create(
               mappedUserMessage,
               mappedAIMessage,
             ],
-            conversations: upsertConversation(state.conversations, AI_USER, mappedAIMessage, 0),
+            conversations: upsertConversation(
+              state.conversations,
+              AI_USER,
+              mappedAIMessage,
+              0
+            ),
+            isAIThinking: false,
           }));
 
           return true;
         } catch (error) {
-          toast.error(error.response?.data?.message || "Failed to get AI response");
+          set({ isAIThinking: false });
+
+          toast.error(
+            error.response?.data?.message || "Failed to get AI response"
+          );
+
           return false;
         }
       },
@@ -250,6 +263,16 @@ export const useChatStore = create(
         socket.off("newMessage");
         socket.off("messagesRead");
         socket.off("conversationRead");
+        socket.off("typing");
+
+        socket.on("typing", ({ senderId, isTyping }) => {
+          set((state) => ({
+            typingUsers: {
+              ...state.typingUsers,
+              [senderId]: isTyping,
+            },
+          }));
+        });
 
         socket.on("newMessage", async (newMessage) => {
           const authUser = useAuthStore.getState().authUser;
@@ -324,6 +347,7 @@ export const useChatStore = create(
         socket?.off("newMessage");
         socket?.off("messagesRead");
         socket?.off("conversationRead");
+        socket?.off("typing");
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -357,7 +381,6 @@ export const useChatStore = create(
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
       setComposerText: (composerText) => set({ composerText }),
-      setSoundEnabled: (isSoundEnabled) => set({ isSoundEnabled }),
 
       sendTextMessage: async (conversationId) => {
         const messageText = get().composerText.trim();
@@ -380,6 +403,13 @@ export const useChatStore = create(
         }
       },
 
+      sendTypingStatus: (receiverId, isTyping) => {
+        const socket = useAuthStore.getState().socket;
+        if (!socket || !receiverId || receiverId === AI_USER_ID) return;
+
+        socket.emit("typing", { receiverId, isTyping });
+      },
+
       markConversationAsRead: async (conversationId) => {
         if (!conversationId) return;
 
@@ -399,7 +429,6 @@ export const useChatStore = create(
     }),
     {
       name: "Lark-storage",
-      partialize: (state) => ({ isSoundEnabled: state.isSoundEnabled }),
     },
   ),
 );

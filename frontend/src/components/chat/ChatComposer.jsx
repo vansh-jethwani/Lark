@@ -1,39 +1,45 @@
 import { Button, TextArea } from "@heroui/react";
 import { PaperclipIcon, LoaderIcon, SendHorizontalIcon } from "lucide-react";
 import { useRef } from "react";
-import useKeyboardSound from "../../hooks/useKeyboardSound";
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
 import { AI_USER_ID } from "../../data/aiUser";
 
 export function ChatComposer() {
   const composerText = useChatStore((state) => state.composerText);
-  const isSoundEnabled = useChatStore((state) => state.isSoundEnabled);
   const sendMediaMessage = useChatStore((state) => state.sendMediaMessage);
   const isSendingMedia = useChatStore((state) => state.isSendingMedia);
   const sendTextMessage = useChatStore((state) => state.sendTextMessage);
   const setComposerText = useChatStore((state) => state.setComposerText);
   const sendAIMessage = useChatStore((state) => state.sendAIMessage);
   const { activeConversationId } = useSelectedConversation();
-  const { playRandomKeyStrokeSound } = useKeyboardSound();
   const mediaInputRef = useRef(null);
+  const sendTypingStatus = useChatStore((state) => state.sendTypingStatus);
+  const typingTimeoutRef = useRef(null);
 
-  const playSoundIfEnabled = () => {
-    if (isSoundEnabled) playRandomKeyStrokeSound();
-  };
 
   const handleSend = async () => {
+    if (activeConversationId !== AI_USER_ID) {
+  sendTypingStatus(activeConversationId, false);
+}
     const didSendMessage =
       activeConversationId === AI_USER_ID
         ? await sendAIMessage()
         : await sendTextMessage(activeConversationId);
 
-    if (didSendMessage) playSoundIfEnabled();
   };
 
   const handleComposerTextChange = (event) => {
     setComposerText(event.target.value);
-    playSoundIfEnabled();
+    if (activeConversationId !== AI_USER_ID) {
+  sendTypingStatus(activeConversationId, true);
+
+  clearTimeout(typingTimeoutRef.current);
+
+  typingTimeoutRef.current = setTimeout(() => {
+    sendTypingStatus(activeConversationId, false);
+  }, 1200);
+}
   };
 
   const handleMediaPick = async (event) => {
@@ -43,7 +49,6 @@ export function ChatComposer() {
 
   if (activeConversationId === AI_USER_ID) {
     const didSendMessage = await sendAIMessage({ file });
-    if (didSendMessage) playSoundIfEnabled();
     return;
   }
 
@@ -52,7 +57,6 @@ export function ChatComposer() {
     file,
   });
 
-  if (didSendMessage) playSoundIfEnabled();
 };
 
   return (

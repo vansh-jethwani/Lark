@@ -28,7 +28,6 @@
 * 🔍 Searchable users and conversations
 * 📱 Fully responsive mobile-friendly UI
 * 🌙 Light/Dark mode with customizable accent themes
-* 🔊 Keyboard typing sound toggle
 * 🐳 Docker support for production-ready deployment
 
 ---
@@ -88,7 +87,7 @@ Lark/
     package.json
 
   frontend/
-    public/             Static assets, sounds
+    public/             Static assets
     src/
       components/       UI components
       context/          Theme providers
