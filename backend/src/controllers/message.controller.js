@@ -22,7 +22,7 @@ export async function getUsersForSidebar(req, res) {
 
         const filteredUsers = await User.find({
             _id: { $ne: loggedInUser },
-        }).select("-password -clerkId -__v");
+        }).select("-password -__v");
 
         res.status(200).json(filteredUsers);
     } catch (error) {
@@ -88,7 +88,7 @@ export async function getConversationsForSidebar(req, res) {
                     },
                 },
             },
-            { $project: { clerkId: 0, unread: 0 } },
+            { $project: { password: 0, unread: 0 } },
 
         ])
 

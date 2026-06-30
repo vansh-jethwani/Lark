@@ -2,12 +2,13 @@ import { getInitials, useSelectedConversation } from "../../hooks/useSelectedCon
 import { useAuthStore } from "../../store/useAuthStore";
 import { useChatStore } from "../../store/useChatStore";
 import { APP_NAME, AppLogo } from "../AppLogo";
-import { UserButton } from "@clerk/react";
+import { Avatar } from "@heroui/react";
 import {Tooltip} from "@heroui/react";
 import { AI_USER, AI_USER_ID } from "../../data/aiUser";
 
 import { SearchField, Tabs } from "@heroui/react";
-import { MessageSquareIcon, UsersIcon } from "lucide-react";
+import { MessageSquareIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import { Link } from "react-router";
 import { ConversationRow } from "./ConversationRow";
 
 function getLastMessagePreview(message) {
@@ -54,6 +55,7 @@ function ChatSidebar() {
   const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
 
   const onlineUsers = useAuthStore((state) => state.onlineUsers);
+  const authUser = useAuthStore((state) => state.authUser);
 
   const { activeConversationId, isLargeScreen } = useSelectedConversation();
 
@@ -113,16 +115,22 @@ function ChatSidebar() {
           <p className="flex-1 truncate text-lg font-bold tracking-tight sm:text-[22px]">
             {APP_NAME}
           </p>
-
-
-          <UserButton
-            appearance={{
-              elements: {
-                avatarBox: "size-8",
-              },
-            }}
-          />
+          <Link to="/profile" aria-label="Profile & Settings">
+            <Avatar className="size-8">
+              <Avatar.Image alt={authUser?.fullName} src={authUser?.profilePic} />
+              <Avatar.Fallback className="text-xs font-semibold">
+                {getInitials(authUser?.fullName)}
+              </Avatar.Fallback>
+            </Avatar>
+          </Link>
         </div>
+        <Link
+          to="/profile"
+          className="mt-3 flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold text-muted hover:bg-surface hover:text-foreground"
+        >
+          <SettingsIcon className="size-4" aria-hidden />
+          Profile & Settings
+        </Link>
       </div>
 
       <Tabs

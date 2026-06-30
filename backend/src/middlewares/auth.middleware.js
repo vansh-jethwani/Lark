@@ -1,15 +1,20 @@
-import { getAuth } from "@clerk/express";
+import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
 
 export default async function protectRoute(req, res, next){
     try{
-       const { userId } = getAuth(req);
+       const token = req.cookies?.jwt;
 
-       if(!userId){
+       if(!token){
         return res.status(401).json({message: "Unauthorized"})
        }
 
-       const user = await User.findOne({clerkId: userId})
+       if (!process.env.JWT_SECRET) {
+        return res.status(500).json({ message: "JWT_SECRET is not configured" });
+       }
+
+       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+       const user = await User.findById(decoded.userId)
        if(!user){
         return res.status(404).json({message: "User not found"})
        }

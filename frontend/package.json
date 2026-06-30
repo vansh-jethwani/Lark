@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@clerk/react": "^6.10.4",
     "@fortawesome/fontawesome-free": "^7.3.0",
     "@heroui/react": "^3.2.1",
     "@heroui/styles": "^3.2.1",

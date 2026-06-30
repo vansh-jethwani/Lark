@@ -731,6 +731,30 @@ export const useChatStore = create(
           console.log("Error in markConversationAsRead", error.message);
         }
       },
+
+      updateLocalUserProfile: (profile) => {
+        if (!profile?._id) return;
+
+        const patchUser = (user) =>
+          user?._id === profile._id
+            ? {
+                ...user,
+                fullName: profile.fullName,
+                username: profile.username,
+                profilePic: profile.profilePic,
+                bio: profile.bio,
+              }
+            : user;
+
+        set((state) => ({
+          users: asArray(state.users).map(patchUser),
+          conversations: asArray(state.conversations).map(patchUser),
+          selectedUser:
+            state.selectedUser?._id === profile._id
+              ? patchUser(state.selectedUser)
+              : state.selectedUser,
+        }));
+      },
     }),
     {
       name: "Lark-storage",

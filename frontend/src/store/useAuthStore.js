@@ -26,10 +26,31 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
+  signup: async (payload) => {
+    const res = await axiosInstance.post("/auth/signup", payload);
+    set({ authUser: res.data, isCheckingAuth: false });
+    get().connectSocket(res.data);
+    return res.data;
+  },
+
+  login: async (payload) => {
+    const res = await axiosInstance.post("/auth/login", payload);
+    set({ authUser: res.data, isCheckingAuth: false });
+    get().connectSocket(res.data);
+    return res.data;
+  },
+
+  logout: async () => {
+    await axiosInstance.post("/auth/logout");
+    get().clearAuth();
+  },
+
   clearAuth: () => {
     set({ authUser: null, isCheckingAuth: false, onlineUsers: [] });
     get().disconnectSocket();
   },
+
+  setAuthUser: (authUser) => set({ authUser }),
 
   connectSocket: (user) => {
     if (!user || get().socket?.connected) return;

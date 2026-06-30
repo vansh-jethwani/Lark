@@ -9,9 +9,9 @@ function getSystemTheme() {
 
 function readStoredTheme() {
   const theme = localStorage.getItem("theme");
-  if (theme === "light" || theme === "dark") return theme;
+  if (theme === "light" || theme === "dark" || theme === "system") return theme;
 
-  return null;
+  return "system";
 }
 
 function applyDomTheme(theme) {
@@ -28,8 +28,19 @@ function readStoredThemePreset() {
 }
 
 export function ThemeProvider({ children }) {
-  const [theme, setThemeState] = useState(() => readStoredTheme() ?? getSystemTheme());
+  const [themePreference, setThemePreferenceState] = useState(readStoredTheme);
+  const [systemTheme, setSystemTheme] = useState(getSystemTheme);
   const [themePreset, setThemePresetState] = useState(readStoredThemePreset);
+  const theme = themePreference === "system" ? systemTheme : themePreference;
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => setSystemTheme(media.matches ? "dark" : "light");
+
+    handleChange();
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, []);
 
   // this applies light/dark mode
   useLayoutEffect(() => {
@@ -43,14 +54,14 @@ export function ThemeProvider({ children }) {
 
   // this stores the theme and theme preset in local storage
   useEffect(() => {
-    localStorage.setItem("theme", theme);
+    localStorage.setItem("theme", themePreference);
     localStorage.setItem("theme-preset", themePreset);
-  }, [theme, themePreset]);
+  }, [themePreference, themePreset]);
 
-  const setTheme = (next) => setThemeState(next);
+  const setTheme = (next) => setThemePreferenceState(next);
 
   const toggleTheme = () => {
-    setThemeState((t) => (t === "dark" ? "light" : "dark"));
+    setThemePreferenceState((t) => (t === "dark" ? "light" : "dark"));
   };
 
   const setThemePreset = (next) => {
@@ -60,7 +71,7 @@ export function ThemeProvider({ children }) {
     });
   };
 
-  const value = { theme, setTheme, toggleTheme, themePreset, setThemePreset };
+  const value = { theme, themePreference, setTheme, toggleTheme, themePreset, setThemePreset };
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
