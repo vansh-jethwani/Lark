@@ -8,6 +8,7 @@ import {
     togglePinMessage,
     forwardMessage,
     editMessage,
+    toggleReaction,
     deleteMessage,
 } from "../controllers/message.controller.js";
 import protectRoute from "../middlewares/auth.middleware.js";
@@ -26,6 +27,7 @@ router.post("/send/:id", upload.single("media"), handleUploadError, sendMessage)
 router.patch("/pin/:id", togglePinMessage);
 router.post("/forward/:id", forwardMessage);
 router.patch("/edit/:id", protectRoute, editMessage);
+router.patch("/reaction/:id", toggleReaction);
 router.delete("/delete/:id", protectRoute, deleteMessage);
 
 

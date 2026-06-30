@@ -62,8 +62,10 @@ export const useChatStore = create(
       activeConversationId: null,
       searchQuery: "",
       sidebarTab: "chats",
+      messageSearchQuery: "",
       composerText: "",
       replyingTo: null,
+      editingMessage: null,
       isSendingMedia: false,
       isAIThinking: false,
       typingUsers: {},
@@ -113,6 +115,7 @@ export const useChatStore = create(
               receiverId: msg.role === "user" ? AI_USER_ID : authUser._id,
               text: msg.text,
               image: msg.fileType?.startsWith("image/") ? msg.file : "",
+              audio: msg.fileType?.startsWith("audio/") ? msg.file : "",
               file: !msg.fileType?.startsWith("image/") ? msg.file : "",
               fileName: msg.fileName,
               fileType: msg.fileType,
@@ -215,8 +218,9 @@ export const useChatStore = create(
           senderId: authUser._id,
           receiverId: AI_USER_ID,
           text: messageText,
-          image: isImage ? URL.createObjectURL(file) : "",
-          file: !isImage && file ? "#" : "",
+            image: isImage ? URL.createObjectURL(file) : "",
+            audio: file?.type?.startsWith("audio/") ? URL.createObjectURL(file) : "",
+            file: !isImage && file ? "#" : "",
           fileName: file?.name || "",
           fileType: file?.type || "",
           fileSize: file?.size || 0,
@@ -244,6 +248,7 @@ export const useChatStore = create(
             receiverId: AI_USER_ID,
             text: userMessage.text,
             image: userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
+            audio: userMessage.fileType?.startsWith("audio/") ? userMessage.file : "",
             file: !userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
             fileName: userMessage.fileName,
             fileType: userMessage.fileType,
@@ -293,12 +298,30 @@ export const useChatStore = create(
           });
 
           set((state) => ({
-            messages: state.messages.map((msg) =>
-              msg._id === messageId ? res.data : msg
-            ),
+            messages: updateMessageById(state.messages, messageId, () => res.data),
+            composerText: "",
+            editingMessage: null,
           }));
+          return true;
         } catch (error) {
-          console.log("Error editing message:", error);
+          toast.error(error.response?.data?.message || "Failed to edit message");
+          return false;
+        }
+      },
+
+      toggleReaction: async (messageId, emoji) => {
+        try {
+          const res = await axiosInstance.patch(`/messages/reaction/${messageId}`, {
+            emoji,
+          });
+
+          set((state) => ({
+            messages: updateMessageById(state.messages, messageId, () => res.data),
+          }));
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to react");
+          return false;
         }
       },
 
@@ -481,6 +504,7 @@ export const useChatStore = create(
         socket.off("conversationRead");
         socket.off("typing");
         socket.off("messagePinned");
+        socket.off("messageReaction");
 
         socket.on("typing", ({ senderId, isTyping }) => {
           set((state) => ({
@@ -569,6 +593,12 @@ export const useChatStore = create(
           }));
         });
 
+        socket.on("messageReaction", (updatedMessage) => {
+          set((state) => ({
+            messages: updateMessageById(state.messages, updatedMessage._id, () => updatedMessage),
+          }));
+        });
+
         socket.on("conversationRead", ({ conversationId }) => {
           set((state) => ({
             conversations: updateConversation(state.conversations, conversationId, (conversation) => ({
@@ -588,6 +618,7 @@ export const useChatStore = create(
         socket?.off("messageEdited");
         socket?.off("messageDeleted");
         socket?.off("messagePinned");
+        socket?.off("messageReaction");
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -619,17 +650,29 @@ export const useChatStore = create(
       },
 
       setSearchQuery: (searchQuery) => set({ searchQuery }),
+      setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
       setComposerText: (composerText) => set({ composerText }),
       setReplyingTo: (message) => set({ replyingTo: message }),
+      setEditingMessage: (message) =>
+        set({
+          editingMessage: message,
+          replyingTo: null,
+          composerText: message?.text || "",
+        }),
 
       clearReplyingTo: () => set({ replyingTo: null }),
+      clearEditingMessage: () => set({ editingMessage: null, composerText: "" }),
 
       sendTextMessage: async (conversationId) => {
         const messageText = get().composerText.trim();
-        const { replyingTo } = get();
+        const { replyingTo, editingMessage } = get();
 
         if (!conversationId || !messageText) return false;
+
+        if (editingMessage) {
+          return get().editMessage(editingMessage.id || editingMessage._id, messageText);
+        }
 
         return get().sendMessage({
           text: messageText,
@@ -637,13 +680,16 @@ export const useChatStore = create(
         });
       },
 
-      sendMediaMessage: async ({ conversationId, file }) => {
+      sendMediaMessage: async ({ conversationId, file, caption = "" }) => {
         if (!conversationId || !file) return false;
 
         const { replyingTo } = get();
 
         const formData = new FormData();
         formData.append("media", file);
+        if (caption.trim()) {
+          formData.append("text", caption.trim());
+        }
 
         if (replyingTo) {
           formData.append("replyTo", replyingTo._id || replyingTo.id);
@@ -656,6 +702,10 @@ export const useChatStore = create(
         } finally {
           set({ isSendingMedia: false });
         }
+      },
+
+      sendVoiceMessage: async ({ conversationId, file }) => {
+        return get().sendMediaMessage({ conversationId, file });
       },
 
       sendTypingStatus: (receiverId, isTyping) => {

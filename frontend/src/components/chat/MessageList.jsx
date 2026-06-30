@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 
 import useScrollToBottom from "../../hooks/useScrollToBottom";
 import { MessageBubble } from "./MessageBubble";
@@ -12,6 +13,7 @@ import { PinnedMessagesModal } from "./PinnedMessagesModal";
 import { DeleteMessageModal } from "./DeleteMessageModal";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SelectionBar } from "./SelectionBar";
+import { formatMessageDate, getMessageDateKey } from "../../lib/utils";
 
 export function MessageList() {
   const { activeConversation, activeConversationId } = useSelectedConversation();
@@ -29,6 +31,8 @@ export function MessageList() {
   const isAIThinking = useChatStore((state) => state.isAIThinking);
   const typingUsers = useChatStore((state) => state.typingUsers);
   const deleteMessages = useChatStore((state) => state.deleteMessages);
+  const messageSearchQuery = useChatStore((state) => state.messageSearchQuery);
+  const normalizedMessageSearchQuery = messageSearchQuery.trim().toLowerCase();
 
   const lastMessageId = activeConversation?.messages.at(-1)?.id;
   const messagesScrollRef = useScrollToBottom(activeConversationId, lastMessageId);
@@ -48,6 +52,13 @@ export function MessageList() {
   );
   const canDeleteForEveryone =
     selectedMessages.length > 0 && selectedMessages.every((message) => message.role === "me");
+  const searchMatches = normalizedMessageSearchQuery
+    ? selectableMessages.filter((message) =>
+        String(message.text || "").toLowerCase().includes(normalizedMessageSearchQuery),
+      )
+    : [];
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+  const currentSearchMatch = searchMatches[currentSearchIndex];
 
   useEffect(() => {
     clearTimeout(highlightTimeoutRef.current);
@@ -100,6 +111,13 @@ export function MessageList() {
     handleJumpToMessage(messageId);
   };
 
+  const goToSearchMatch = (index) => {
+    if (searchMatches.length === 0) return;
+    const nextIndex = (index + searchMatches.length) % searchMatches.length;
+    setCurrentSearchIndex(nextIndex);
+    handleJumpToMessage(searchMatches[nextIndex].id);
+  };
+
   const startSelection = (messageId) => {
     setSelectionConversationId(activeConversationId);
     setSelectionMode(true);
@@ -147,10 +165,6 @@ export function MessageList() {
             isSelectionActive ? "pb-24" : ""
           }`}
         >
-          <p className="mb-3 text-center text-[11px] font-medium uppercase tracking-wide text-muted">
-            Today
-          </p>
-
           {showPinnedBanner ? (
             <PinnedMessageBanner
               message={currentPinnedMessage}
@@ -170,21 +184,67 @@ export function MessageList() {
             />
           ) : null}
 
-          {activeConversation.messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              isHighlighted={
-                highlightedMessage?.conversationId === activeConversationId &&
-                highlightedMessage?.messageId === message.id
-              }
-              isSelectionMode={isSelectionActive}
-              isSelected={isSelectionActive && selectedMessageIds.includes(message.id)}
-              onJumpToMessage={handleJumpToMessage}
-              onToggleSelected={toggleSelectedMessage}
-              onStartSelection={startSelection}
-            />
-          ))}
+          {normalizedMessageSearchQuery ? (
+            <div className="sticky top-0 z-10 mb-2 flex items-center gap-2 rounded-xl border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur">
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-accent">
+                {searchMatches.length
+                  ? `${currentSearchIndex + 1}/${searchMatches.length} results`
+                  : "No results"}
+              </span>
+              <button
+                type="button"
+                onClick={() => goToSearchMatch(currentSearchIndex - 1)}
+                disabled={searchMatches.length === 0}
+                className="grid size-8 place-items-center rounded-full text-muted hover:bg-surface disabled:opacity-40"
+                aria-label="Previous search result"
+              >
+                <ChevronUpIcon className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => goToSearchMatch(currentSearchIndex + 1)}
+                disabled={searchMatches.length === 0}
+                className="grid size-8 place-items-center rounded-full text-muted hover:bg-surface disabled:opacity-40"
+                aria-label="Next search result"
+              >
+                <ChevronDownIcon className="size-4" />
+              </button>
+            </div>
+          ) : null}
+
+          {activeConversation.messages.map((message, index) => {
+            const currentDateKey = getMessageDateKey(message.createdAt);
+            const previousDateKey =
+              index > 0
+                ? getMessageDateKey(activeConversation.messages[index - 1].createdAt)
+                : null;
+            const shouldShowDate = currentDateKey !== previousDateKey;
+
+            return (
+              <div key={message.id} className="contents">
+                {shouldShowDate ? (
+                  <p className="mb-3 mt-2 text-center text-[11px] font-medium uppercase tracking-wide text-muted first:mt-0">
+                    {formatMessageDate(message.createdAt)}
+                  </p>
+                ) : null}
+
+                <MessageBubble
+                  message={message}
+                  isHighlighted={
+                    (highlightedMessage?.conversationId === activeConversationId &&
+                      highlightedMessage?.messageId === message.id) ||
+                    currentSearchMatch?.id === message.id
+                  }
+                  searchQuery={messageSearchQuery}
+                  isSelectionMode={isSelectionActive}
+                  isSelected={isSelectionActive && selectedMessageIds.includes(message.id)}
+                  onJumpToMessage={handleJumpToMessage}
+                  onToggleSelected={toggleSelectedMessage}
+                  onStartSelection={startSelection}
+                />
+              </div>
+            );
+          })}
 
           {activeConversationId === AI_USER_ID && isAIThinking ? (
             <TypingIndicator label="Lark AI is thinking" />

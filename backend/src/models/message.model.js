@@ -21,6 +21,10 @@ const messageSchema = new mongoose.Schema({
   video: {
     type: String,
   },
+  audio: {
+    type: String,
+    default: "",
+  },
   file: {
     type: String,
     default: "",
@@ -83,6 +87,19 @@ const messageSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  reactions: [
+    {
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      emoji: {
+        type: String,
+        required: true,
+      },
+    },
+  ],
 }, { timestamps: true });
 
 const Message = mongoose.model("Message", messageSchema);

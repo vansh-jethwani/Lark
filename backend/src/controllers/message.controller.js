@@ -3,7 +3,7 @@ import Message from "../models/message.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 
-const MESSAGE_POPULATE = "text image video file fileName senderId";
+const MESSAGE_POPULATE = "text image video audio file fileName senderId";
 
 function isMessageParticipant(message, userId) {
     return (
@@ -185,6 +185,7 @@ export async function sendMessage(req, res) {
 
         let imageUrl;
         let videoUrl;
+        let audioUrl;
         let fileUrl;
         let fileName;
         let fileType;
@@ -206,6 +207,9 @@ export async function sendMessage(req, res) {
             else if (mediaFile.mimetype.startsWith("video")) {
                 videoUrl = url;
             }
+            else if (mediaFile.mimetype.startsWith("audio")) {
+                audioUrl = url;
+            }
             else {
                 fileUrl = url;
             }
@@ -224,6 +228,7 @@ export async function sendMessage(req, res) {
             text: text || "",
             image: imageUrl || "",
             video: videoUrl || "",
+            audio: audioUrl || "",
             file: fileUrl || "",
             fileName: fileName || "",
             fileType: fileType || "",
@@ -336,6 +341,7 @@ export async function forwardMessage(req, res) {
                 text: originalMessage.text || "",
                 image: originalMessage.image || "",
                 video: originalMessage.video || "",
+                audio: originalMessage.audio || "",
                 file: originalMessage.file || "",
                 fileName: originalMessage.fileName || "",
                 fileType: originalMessage.fileType || "",
@@ -389,21 +395,72 @@ export const editMessage = async (req, res) => {
         message.isEdited = true;
 
         await message.save();
+        const populatedMessage = await populateReply(message._id);
 
         const receiverSocketId = getReceiverSocketId(message.receiverId.toString());
         const senderSocketId = getReceiverSocketId(message.senderId.toString());
 
         if (receiverSocketId) {
-            io.to(receiverSocketId).emit("messageEdited", message);
+            io.to(receiverSocketId).emit("messageEdited", populatedMessage);
         }
 
         if (senderSocketId) {
-            io.to(senderSocketId).emit("messageEdited", message);
+            io.to(senderSocketId).emit("messageEdited", populatedMessage);
         }
 
-        res.status(200).json(message);
+        res.status(200).json(populatedMessage);
     } catch (error) {
         console.log("Error in editMessage controller:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+export const toggleReaction = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { emoji } = req.body;
+        const userId = req.userId;
+
+        if (!emoji || typeof emoji !== "string") {
+            return res.status(400).json({ message: "Reaction emoji is required" });
+        }
+
+        const message = await Message.findById(id);
+
+        if (!message) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        if (!isMessageParticipant(message, userId)) {
+            return res.status(403).json({ message: "Not allowed" });
+        }
+
+        const existingReactionIndex = message.reactions.findIndex(
+            (reaction) => reaction.userId.toString() === userId.toString()
+        );
+
+        if (existingReactionIndex >= 0 && message.reactions[existingReactionIndex].emoji === emoji) {
+            message.reactions.splice(existingReactionIndex, 1);
+        } else if (existingReactionIndex >= 0) {
+            message.reactions[existingReactionIndex].emoji = emoji;
+        } else {
+            message.reactions.push({ userId, emoji });
+        }
+
+        await message.save();
+
+        const populatedMessage = await populateReply(message._id);
+        const senderSocketIds = getReceiverSocketId(message.senderId.toString());
+        const receiverSocketIds = getReceiverSocketId(message.receiverId.toString());
+        const socketIds = [...new Set([...senderSocketIds, ...receiverSocketIds])];
+
+        if (socketIds.length > 0) {
+            io.to(socketIds).emit("messageReaction", populatedMessage);
+        }
+
+        res.status(200).json(populatedMessage);
+    } catch (error) {
+        console.log("Error in toggleReaction:", error.message);
         res.status(500).json({ message: "Internal server error" });
     }
 };

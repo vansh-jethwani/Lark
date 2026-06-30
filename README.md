@@ -294,7 +294,6 @@ docker run -p 3001:3001 --env-file backend/.env lark
 | `npm run dev`        | Start backend with Nodemon |
 | `npm run build`      | Build backend              |
 | `npm start`          | Start production server    |
-| `npm run seed-users` | Seed demo users            |
 
 ---
 

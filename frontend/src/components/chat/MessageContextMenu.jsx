@@ -7,6 +7,7 @@ import {
   Trash2,
   CheckSquare,
 } from "lucide-react";
+import { ReactionPicker } from "./ReactionBar";
 
 export function MessageContextMenu({
   position,
@@ -20,6 +21,7 @@ export function MessageContextMenu({
   onForward,
   onDelete,
   onSelect,
+  onReact,
 }) {
   return (
     <>
@@ -36,6 +38,8 @@ export function MessageContextMenu({
           left: position.x,
         }}
       >
+        <ReactionPicker onReact={onReact} />
+
         <MenuButton
           icon={<Reply size={18} />}
           text="Reply"

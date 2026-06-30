@@ -27,6 +27,7 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
           text: message.replyTo.text || "",
           imageUrl: message.replyTo.image,
           videoUrl: message.replyTo.video,
+          audioUrl: message.replyTo.audio,
           fileUrl: message.replyTo.file,
           fileName: message.replyTo.fileName,
           senderId: message.replyTo.senderId,
@@ -39,8 +40,10 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
       role: String(message.senderId) === String(authUser?._id) ? "me" : "them",
       text: message.text || "",
       time: formatMessageTime(message.createdAt),
+      createdAt: message.createdAt,
       imageUrl: message.image,
       videoUrl: message.video,
+      audioUrl: message.audio,
       fileUrl: message.file,
       fileName: message.fileName,
       fileType: message.fileType,
@@ -54,6 +57,7 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
       pinnedBy: message.pinnedBy,
       deliveredAt: message.deliveredAt,
       readAt: message.readAt,
+      reactions: Array.isArray(message.reactions) ? message.reactions : [],
       replyTo,
     };
   });
