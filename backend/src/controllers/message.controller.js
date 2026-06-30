@@ -3,6 +3,19 @@ import Message from "../models/message.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 
+const MESSAGE_POPULATE = "text image video file fileName senderId";
+
+function isMessageParticipant(message, userId) {
+    return (
+        message.senderId.toString() === userId.toString() ||
+        message.receiverId.toString() === userId.toString()
+    );
+}
+
+async function populateReply(messageId) {
+    return Message.findById(messageId).populate("replyTo", MESSAGE_POPULATE);
+}
+
 export async function getUsersForSidebar(req, res) {
     try {
         const loggedInUser = req.userId;
@@ -96,10 +109,13 @@ export async function getMessages(req, res) {
 
         const messages = await Message.find({
             $or: [
-                { senderId, receiverId },
+                { senderId: senderId, receiverId: receiverId },
                 { senderId: receiverId, receiverId: senderId },
             ],
-        }).sort({ createdAt: 1 });
+            deletedFor: { $nin: [senderId] },
+        })
+            .populate("replyTo", MESSAGE_POPULATE)
+            .sort({ createdAt: 1 });
 
         res.status(200).json(messages);
     } catch (error) {
@@ -126,7 +142,7 @@ async function markUnreadMessagesAsRead(readerId, conversationPartnerId) {
     );
 
     const senderSocketIds = getReceiverSocketId(conversationPartnerId);
-    if(senderSocketIds.length > 0){
+    if (senderSocketIds.length > 0) {
         io.to(senderSocketIds).emit("messagesRead", {
             conversationId: String(readerId),
             readerId: String(readerId),
@@ -136,7 +152,7 @@ async function markUnreadMessagesAsRead(readerId, conversationPartnerId) {
     }
 
     const readerSocketIds = getReceiverSocketId(readerId);
-    if(readerSocketIds.length > 0){
+    if (readerSocketIds.length > 0) {
         io.to(readerSocketIds).emit("conversationRead", {
             conversationId: String(conversationPartnerId),
             readAt,
@@ -162,7 +178,7 @@ export async function markConversationAsRead(req, res) {
 
 export async function sendMessage(req, res) {
     try {
-        const { text } = req.body;
+        const { text, replyTo } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
         const mediaFile = req.file || req.files?.media?.[0];
@@ -174,9 +190,9 @@ export async function sendMessage(req, res) {
         let fileType;
         let fileSize;
 
-        if(mediaFile){
-            if(!hasImagekitConfig()){
-                return res.status(503).json({message: "Media upload is not configured."})
+        if (mediaFile) {
+            if (!hasImagekitConfig()) {
+                return res.status(503).json({ message: "Media upload is not configured." })
             }
 
             const url = await uploadChatMedia(mediaFile);
@@ -184,19 +200,19 @@ export async function sendMessage(req, res) {
             fileType = mediaFile.mimetype;
             fileSize = mediaFile.size;
 
-            if(mediaFile.mimetype.startsWith("image")){
+            if (mediaFile.mimetype.startsWith("image")) {
                 imageUrl = url;
             }
-            else if(mediaFile.mimetype.startsWith("video")){
+            else if (mediaFile.mimetype.startsWith("video")) {
                 videoUrl = url;
             }
-            else{
+            else {
                 fileUrl = url;
             }
         }
 
-        if(!text?.trim() && !mediaFile){
-            return res.status(400).json({message: "Message text or media is required."});
+        if (!text?.trim() && !mediaFile) {
+            return res.status(400).json({ message: "Message text or media is required." });
         }
 
         const receiverSocketId = getReceiverSocketId(receiverId);
@@ -213,21 +229,248 @@ export async function sendMessage(req, res) {
             fileType: fileType || "",
             fileSize: fileSize || 0,
             deliveredAt,
+            replyTo: replyTo || null,
         });
 
         await newMessage.save();
+        const populatedMessage = await populateReply(newMessage._id);
 
         const senderSocketId = getReceiverSocketId(senderId);
         const messageSocketIds = [...new Set([...receiverSocketId, ...senderSocketId])];
 
-        if(messageSocketIds.length > 0){
-            io.to(messageSocketIds).emit("newMessage", newMessage);
+        if (messageSocketIds.length > 0) {
+            io.to(messageSocketIds).emit("newMessage", populatedMessage);
         }
 
-        res.status(201).json(newMessage);
+        res.status(201).json(populatedMessage);
 
     } catch (error) {
         console.log("Error in sendMessage: ", error.message);
         res.status(500).json({ message: error.message || "Failed to upload media." });
     }
 }
+
+export async function togglePinMessage(req, res) {
+    try {
+        const { id } = req.params;
+        const userId = req.userId;
+
+        const message = await Message.findById(id);
+
+        if (!message) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        if (!isMessageParticipant(message, userId)) {
+            return res.status(403).json({ message: "Not allowed" });
+        }
+
+        message.isPinned = !message.isPinned;
+        message.pinnedAt = message.isPinned ? new Date() : null;
+        message.pinnedBy = message.isPinned ? userId : null;
+
+        await message.save();
+
+        const populatedMessage = await populateReply(message._id);
+        const senderSocketIds = getReceiverSocketId(message.senderId.toString());
+        const receiverSocketIds = getReceiverSocketId(message.receiverId.toString());
+        const socketIds = [...new Set([...senderSocketIds, ...receiverSocketIds])];
+
+        if (socketIds.length > 0) {
+            io.to(socketIds).emit("messagePinned", populatedMessage);
+        }
+
+        res.status(200).json(populatedMessage);
+    } catch (error) {
+        console.log("Error in togglePinMessage: ", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+export async function forwardMessage(req, res) {
+    try {
+        const { id } = req.params;
+        const { receiverId, receiverIds } = req.body;
+        const senderId = req.userId;
+        const targetReceiverIds = [
+            ...new Set(
+                (Array.isArray(receiverIds) ? receiverIds : [receiverId])
+                    .filter(Boolean)
+                    .map((value) => value.toString())
+            ),
+        ];
+
+        if (targetReceiverIds.length === 0) {
+            return res.status(400).json({ message: "Forward recipient is required." });
+        }
+
+        if (targetReceiverIds.some((targetId) => targetId === senderId.toString())) {
+            return res.status(400).json({ message: "You cannot forward a message to yourself." });
+        }
+
+        const originalMessage = await Message.findById(id);
+
+        if (!originalMessage) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        if (!isMessageParticipant(originalMessage, senderId)) {
+            return res.status(403).json({ message: "Not allowed" });
+        }
+
+        const receivers = await User.find({ _id: { $in: targetReceiverIds } }).select("_id");
+
+        if (receivers.length !== targetReceiverIds.length) {
+            return res.status(404).json({ message: "One or more recipients were not found" });
+        }
+
+        const forwardedMessages = [];
+
+        for (const targetReceiverId of targetReceiverIds) {
+            const receiverSocketIds = getReceiverSocketId(targetReceiverId);
+            const deliveredAt = receiverSocketIds.length > 0 ? new Date() : null;
+
+            const forwardedMessage = new Message({
+                senderId,
+                receiverId: targetReceiverId,
+                text: originalMessage.text || "",
+                image: originalMessage.image || "",
+                video: originalMessage.video || "",
+                file: originalMessage.file || "",
+                fileName: originalMessage.fileName || "",
+                fileType: originalMessage.fileType || "",
+                fileSize: originalMessage.fileSize || 0,
+                deliveredAt,
+                forwardedFrom: originalMessage._id,
+                isForwarded: true,
+            });
+
+            await forwardedMessage.save();
+
+            const populatedMessage = await populateReply(forwardedMessage._id);
+            const senderSocketIds = getReceiverSocketId(senderId);
+            const socketIds = [...new Set([...receiverSocketIds, ...senderSocketIds])];
+
+            if (socketIds.length > 0) {
+                io.to(socketIds).emit("newMessage", populatedMessage);
+            }
+
+            forwardedMessages.push(populatedMessage);
+        }
+
+        res.status(201).json({ messages: forwardedMessages });
+    } catch (error) {
+        console.log("Error in forwardMessage: ", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+export const editMessage = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { text } = req.body;
+        const myId = req.userId;
+
+        if (!text || !text.trim()) {
+            return res.status(400).json({ message: "Message text is required" });
+        }
+
+        const message = await Message.findById(id);
+
+        if (!message) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        if (message.senderId.toString() !== myId.toString()) {
+            return res.status(403).json({ message: "You can edit only your own message" });
+        }
+
+        message.text = text.trim();
+        message.isEdited = true;
+
+        await message.save();
+
+        const receiverSocketId = getReceiverSocketId(message.receiverId.toString());
+        const senderSocketId = getReceiverSocketId(message.senderId.toString());
+
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit("messageEdited", message);
+        }
+
+        if (senderSocketId) {
+            io.to(senderSocketId).emit("messageEdited", message);
+        }
+
+        res.status(200).json(message);
+    } catch (error) {
+        console.log("Error in editMessage controller:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+export const deleteMessage = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { type } = req.body; // "me" or "everyone"
+        const myId = req.userId;
+
+        const message = await Message.findById(id);
+
+        if (!message) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        const isSender = message.senderId.toString() === myId.toString();
+        const isReceiver = message.receiverId.toString() === myId.toString();
+
+        if (!isSender && !isReceiver) {
+            return res.status(403).json({ message: "Not allowed" });
+        }
+
+        if (type === "everyone") {
+            if (!isSender) {
+                return res.status(403).json({
+                    message: "Only sender can delete for everyone",
+                });
+            }
+
+            await Message.findByIdAndDelete(id);
+
+            const receiverSocketId = getReceiverSocketId(message.receiverId.toString());
+            const senderSocketId = getReceiverSocketId(message.senderId.toString());
+
+            if (receiverSocketId) io.to(receiverSocketId).emit("messageDeleted", id);
+            if (senderSocketId) io.to(senderSocketId).emit("messageDeleted", id);
+
+            return res.status(200).json({
+                messageId: id,
+                type: "everyone",
+            });
+        }
+
+        const deletedFor = message.deletedFor || [];
+
+        const alreadyDeleted = deletedFor.some(
+            (userId) => userId.toString() === myId.toString()
+        );
+
+        if (!alreadyDeleted) {
+            message.deletedFor.push(myId);
+            await message.save();
+        } await message.save();
+
+        const senderSocketId = getReceiverSocketId(myId.toString());
+
+        if (senderSocketId) {
+            io.to(senderSocketId).emit("messageDeletedForMe", id);
+        }
+
+        res.status(200).json({
+            messageId: id,
+            type: "me",
+        });
+    } catch (error) {
+        console.log("Error in deleteMessage:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};

@@ -14,20 +14,49 @@ export function getInitials(name) {
 }
 
 function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
-  const mappedMessages = (Array.isArray(messages) ? messages : []).map((message) => ({
-    id: message._id,
-    role: String(message.senderId) === String(authUser?._id) ? "me" : "them",
-    text: message.text || "",
-    time: formatMessageTime(message.createdAt),
-    imageUrl: message.image,
-    videoUrl: message.video,
-    fileUrl: message.file,
-    fileName: message.fileName,
-    fileType: message.fileType,
-    fileSize: message.fileSize,
-    deliveredAt: message.deliveredAt,
-    readAt: message.readAt,
-  }));
+  const getId = (value) => String(value?._id || value || "");
+  const getSenderName = (senderId) =>
+    getId(senderId) === getId(authUser?._id)
+      ? authUser?.fullName || "You"
+      : user.fullName;
+
+  const mappedMessages = (Array.isArray(messages) ? messages : []).map((message) => {
+    const replyTo = message.replyTo
+      ? {
+          id: message.replyTo._id,
+          text: message.replyTo.text || "",
+          imageUrl: message.replyTo.image,
+          videoUrl: message.replyTo.video,
+          fileUrl: message.replyTo.file,
+          fileName: message.replyTo.fileName,
+          senderId: message.replyTo.senderId,
+          senderName: getSenderName(message.replyTo.senderId),
+        }
+      : null;
+
+    return {
+      id: message._id,
+      role: String(message.senderId) === String(authUser?._id) ? "me" : "them",
+      text: message.text || "",
+      time: formatMessageTime(message.createdAt),
+      imageUrl: message.image,
+      videoUrl: message.video,
+      fileUrl: message.file,
+      fileName: message.fileName,
+      fileType: message.fileType,
+      fileSize: message.fileSize,
+      senderId: message.senderId,
+      senderName: getSenderName(message.senderId),
+      isForwarded: Boolean(message.isForwarded),
+      forwardedFrom: message.forwardedFrom,
+      isPinned: Boolean(message.isPinned),
+      pinnedAt: message.pinnedAt,
+      pinnedBy: message.pinnedBy,
+      deliveredAt: message.deliveredAt,
+      readAt: message.readAt,
+      replyTo,
+    };
+  });
 
   return {
     id: user._id,

@@ -43,6 +43,12 @@ function updateConversation(conversations, conversationId, updater) {
   );
 }
 
+function updateMessageById(messages, messageId, updater) {
+  return asArray(messages).map((message) =>
+    String(message._id) === String(messageId) ? updater(message) : message,
+  );
+}
+
 export const useChatStore = create(
   persist(
     (set, get) => ({
@@ -57,6 +63,7 @@ export const useChatStore = create(
       searchQuery: "",
       sidebarTab: "chats",
       composerText: "",
+      replyingTo: null,
       isSendingMedia: false,
       isAIThinking: false,
       typingUsers: {},
@@ -153,7 +160,29 @@ export const useChatStore = create(
         if (!selectedUser) return false;
 
         try {
-          const res = await axiosInstance.post(`/messages/send/${selectedUser._id}`, messageData);
+          const { replyingTo } = get();
+          let finalMessageData = messageData;
+
+          if (replyingTo) {
+            const replyToId = replyingTo._id || replyingTo.id;
+
+            if (messageData instanceof FormData) {
+              finalMessageData = messageData;
+              if (!finalMessageData.has("replyTo")) {
+                finalMessageData.append("replyTo", replyToId);
+              }
+            } else {
+              finalMessageData = {
+                ...messageData,
+                replyTo: replyToId,
+              };
+            }
+          }
+
+          const res = await axiosInstance.post(
+            `/messages/send/${selectedUser._id}`,
+            finalMessageData
+          );
           set((state) => ({
             messages: asArray(state.messages).some(
               (message) => String(message._id) === String(res.data._id),
@@ -161,6 +190,7 @@ export const useChatStore = create(
               ? state.messages
               : [...asArray(state.messages), res.data],
             composerText: "",
+            replyingTo: null,
             conversations: upsertConversation(state.conversations, selectedUser, res.data, 0),
           }));
           return true;
@@ -256,6 +286,192 @@ export const useChatStore = create(
         }
       },
 
+      editMessage: async (messageId, text) => {
+        try {
+          const res = await axiosInstance.patch(`/messages/edit/${messageId}`, {
+            text,
+          });
+
+          set((state) => ({
+            messages: state.messages.map((msg) =>
+              msg._id === messageId ? res.data : msg
+            ),
+          }));
+        } catch (error) {
+          console.log("Error editing message:", error);
+        }
+      },
+
+      deleteMessage: async (id, type = "me") => {
+        try {
+          await axiosInstance.delete(`/messages/delete/${id}`, {
+            data: { type },
+          });
+
+          set((state) => ({
+            messages: state.messages.filter((message) => {
+              const messageId = message._id || message.id;
+              return messageId !== id;
+            }),
+          }));
+        } catch (error) {
+          console.log("Error deleting message:", error.response?.data || error.message);
+        }
+      },
+
+      deleteMessages: async (ids, type = "me") => {
+        const messageIds = asArray(ids).filter(Boolean);
+        if (messageIds.length === 0) return false;
+
+        try {
+          await Promise.all(
+            messageIds.map((id) =>
+              axiosInstance.delete(`/messages/delete/${id}`, {
+                data: { type },
+              }),
+            ),
+          );
+
+          const deletedIds = new Set(messageIds.map((id) => String(id)));
+          set((state) => ({
+            messages: asArray(state.messages).filter(
+              (message) => !deletedIds.has(String(message._id || message.id)),
+            ),
+          }));
+
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to delete messages");
+          return false;
+        }
+      },
+
+      togglePinMessage: async (id) => {
+        try {
+          const res = await axiosInstance.patch(`/messages/pin/${id}`);
+
+          set((state) => ({
+            messages: updateMessageById(state.messages, res.data._id, () => res.data),
+          }));
+
+          toast.success(res.data.isPinned ? "Message pinned" : "Message unpinned");
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to update pin");
+          return false;
+        }
+      },
+
+      forwardMessage: async ({ messageId, receiverId, receiverIds }) => {
+        const targetReceiverIds = receiverIds || (receiverId ? [receiverId] : []);
+        if (!messageId || targetReceiverIds.length === 0) return false;
+
+        try {
+          const res = await axiosInstance.post(`/messages/forward/${messageId}`, {
+            receiverIds: targetReceiverIds,
+          });
+          const forwardedMessages = asArray(res.data?.messages || res.data);
+
+          set((state) => {
+            const nextMessages = forwardedMessages.reduce((messages, forwardedMessage) => {
+              const partnerId = getMessagePartnerId(
+                forwardedMessage,
+                useAuthStore.getState().authUser?._id,
+              );
+              const isActiveConversation = String(state.activeConversationId) === String(partnerId);
+              const hasMessage = asArray(messages).some(
+                (message) => String(message._id) === String(forwardedMessage._id),
+              );
+
+              return isActiveConversation && !hasMessage
+                ? [...asArray(messages), forwardedMessage]
+                : messages;
+            }, state.messages);
+
+            const nextConversations = forwardedMessages.reduce((conversations, forwardedMessage) => {
+              const partnerId = getMessagePartnerId(
+                forwardedMessage,
+                useAuthStore.getState().authUser?._id,
+              );
+              const targetUser =
+                state.users.find((user) => user._id === partnerId) ||
+                state.conversations.find((conversation) => conversation._id === partnerId);
+
+              return upsertConversation(conversations, targetUser, forwardedMessage, 0);
+            }, state.conversations);
+
+            return {
+              messages: nextMessages,
+              conversations: nextConversations,
+            };
+          });
+
+          toast.success(
+            targetReceiverIds.length === 1
+              ? "Message forwarded"
+              : `Message forwarded to ${targetReceiverIds.length} chats`,
+          );
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to forward message");
+          return false;
+        }
+      },
+
+      forwardMessages: async ({ messageIds, receiverIds }) => {
+        const sourceMessageIds = asArray(messageIds).filter(Boolean);
+        const targetReceiverIds = asArray(receiverIds).filter(Boolean);
+        if (sourceMessageIds.length === 0 || targetReceiverIds.length === 0) return false;
+
+        try {
+          const responses = await Promise.all(
+            sourceMessageIds.map((messageId) =>
+              axiosInstance.post(`/messages/forward/${messageId}`, {
+                receiverIds: targetReceiverIds,
+              }),
+            ),
+          );
+          const forwardedMessages = responses.flatMap((res) =>
+            asArray(res.data?.messages || res.data),
+          );
+
+          set((state) => {
+            const authUserId = useAuthStore.getState().authUser?._id;
+            const nextMessages = forwardedMessages.reduce((messages, forwardedMessage) => {
+              const partnerId = getMessagePartnerId(forwardedMessage, authUserId);
+              const isActiveConversation = String(state.activeConversationId) === String(partnerId);
+              const hasMessage = asArray(messages).some(
+                (message) => String(message._id) === String(forwardedMessage._id),
+              );
+
+              return isActiveConversation && !hasMessage
+                ? [...asArray(messages), forwardedMessage]
+                : messages;
+            }, state.messages);
+
+            const nextConversations = forwardedMessages.reduce((conversations, forwardedMessage) => {
+              const partnerId = getMessagePartnerId(forwardedMessage, authUserId);
+              const targetUser =
+                state.users.find((user) => user._id === partnerId) ||
+                state.conversations.find((conversation) => conversation._id === partnerId);
+
+              return upsertConversation(conversations, targetUser, forwardedMessage, 0);
+            }, state.conversations);
+
+            return {
+              messages: nextMessages,
+              conversations: nextConversations,
+            };
+          });
+
+          toast.success("Messages forwarded");
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to forward messages");
+          return false;
+        }
+      },
+
       subscribeToChatEvents: () => {
         const socket = useAuthStore.getState().socket;
         if (!socket) return;
@@ -264,6 +480,7 @@ export const useChatStore = create(
         socket.off("messagesRead");
         socket.off("conversationRead");
         socket.off("typing");
+        socket.off("messagePinned");
 
         socket.on("typing", ({ senderId, isTyping }) => {
           set((state) => ({
@@ -332,6 +549,26 @@ export const useChatStore = create(
           }));
         });
 
+        socket.on("messageEdited", (updatedMessage) => {
+          set((state) => ({
+            messages: state.messages.map((msg) =>
+              msg._id === updatedMessage._id ? updatedMessage : msg
+            ),
+          }));
+        });
+
+        socket.on("messageDeleted", (messageId) => {
+          set((state) => ({
+            messages: state.messages.filter((msg) => msg._id !== messageId),
+          }));
+        });
+
+        socket.on("messagePinned", (updatedMessage) => {
+          set((state) => ({
+            messages: updateMessageById(state.messages, updatedMessage._id, () => updatedMessage),
+          }));
+        });
+
         socket.on("conversationRead", ({ conversationId }) => {
           set((state) => ({
             conversations: updateConversation(state.conversations, conversationId, (conversation) => ({
@@ -348,6 +585,9 @@ export const useChatStore = create(
         socket?.off("messagesRead");
         socket?.off("conversationRead");
         socket?.off("typing");
+        socket?.off("messageEdited");
+        socket?.off("messageDeleted");
+        socket?.off("messagePinned");
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -381,21 +621,36 @@ export const useChatStore = create(
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
       setComposerText: (composerText) => set({ composerText }),
+      setReplyingTo: (message) => set({ replyingTo: message }),
+
+      clearReplyingTo: () => set({ replyingTo: null }),
 
       sendTextMessage: async (conversationId) => {
         const messageText = get().composerText.trim();
+        const { replyingTo } = get();
+
         if (!conversationId || !messageText) return false;
 
-        return get().sendMessage({ text: messageText });
+        return get().sendMessage({
+          text: messageText,
+          replyTo: replyingTo?._id || replyingTo?.id || null,
+        });
       },
 
       sendMediaMessage: async ({ conversationId, file }) => {
         if (!conversationId || !file) return false;
 
+        const { replyingTo } = get();
+
         const formData = new FormData();
         formData.append("media", file);
 
+        if (replyingTo) {
+          formData.append("replyTo", replyingTo._id || replyingTo.id);
+        }
+
         set({ isSendingMedia: true });
+
         try {
           return await get().sendMessage(formData);
         } finally {

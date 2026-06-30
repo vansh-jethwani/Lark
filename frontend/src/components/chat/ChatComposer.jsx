@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
 import { AI_USER_ID } from "../../data/aiUser";
+import { ReplyPreview } from "./ReplyPreview";
 
 export function ChatComposer() {
   const composerText = useChatStore((state) => state.composerText);
@@ -16,17 +17,19 @@ export function ChatComposer() {
   const mediaInputRef = useRef(null);
   const sendTypingStatus = useChatStore((state) => state.sendTypingStatus);
   const typingTimeoutRef = useRef(null);
+  const { replyingTo, clearReplyingTo } = useChatStore();
 
 
   const handleSend = async () => {
     if (activeConversationId !== AI_USER_ID) {
   sendTypingStatus(activeConversationId, false);
 }
-    const didSendMessage =
-      activeConversationId === AI_USER_ID
-        ? await sendAIMessage()
-        : await sendTextMessage(activeConversationId);
+    if (activeConversationId === AI_USER_ID) {
+      await sendAIMessage();
+      return;
+    }
 
+    await sendTextMessage(activeConversationId);
   };
 
   const handleComposerTextChange = (event) => {
@@ -48,19 +51,19 @@ export function ChatComposer() {
   if (!file) return;
 
   if (activeConversationId === AI_USER_ID) {
-    const didSendMessage = await sendAIMessage({ file });
+    await sendAIMessage({ file });
     return;
   }
 
-  const didSendMessage = await sendMediaMessage({
+  await sendMediaMessage({
     conversationId: activeConversationId,
     file,
   });
-
 };
 
   return (
     <footer className="shrink-0 border-t border-border px-1.5 pb-2 pt-2 sm:px-2">
+      <ReplyPreview message={replyingTo} onClose={clearReplyingTo} />
       {isSendingMedia ? (
         <div className="mx-auto mb-2 flex max-w-full items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-muted">
           <LoaderIcon
