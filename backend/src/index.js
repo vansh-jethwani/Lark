@@ -1,3 +1,5 @@
+// import dotenv from "dotenv";
+// dotenv.config();
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -51,6 +53,7 @@ if (fs.existsSync(publicDir)) {
 server.listen(PORT, () => {
     dbConnect();
     console.log(`Server started on port ${PORT}`);
+    console.log("JWT_SECRET exists:", !!process.env.JWT_SECRET);
 
     if(process.env.NODE_ENV === "production"){
         job.start();

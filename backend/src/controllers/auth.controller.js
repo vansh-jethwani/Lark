@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import dotenv from "dotenv";
+dotenv.config();
 
 const COOKIE_NAME = "jwt";
 const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
@@ -84,7 +86,7 @@ export async function signup(req, res) {
             fullName,
             username,
             password: hashedPassword,
-            authProvider: "password",
+            // authProvider: "password",
         });
 
         setTokenCookie(res, user._id);

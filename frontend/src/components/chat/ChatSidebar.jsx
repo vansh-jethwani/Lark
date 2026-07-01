@@ -124,13 +124,6 @@ function ChatSidebar() {
             </Avatar>
           </Link>
         </div>
-        <Link
-          to="/profile"
-          className="mt-3 flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold text-muted hover:bg-surface hover:text-foreground"
-        >
-          <SettingsIcon className="size-4" aria-hidden />
-          Profile & Settings
-        </Link>
       </div>
 
       <Tabs

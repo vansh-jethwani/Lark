@@ -8,7 +8,7 @@ const heroPanelClassName = [
 ].join(" ");
 
 const heroImageClassName = [
-  "w-[min(80%,28rem)]",
+  "w-[min(72%,24rem)]",
   "animate-[auth-float-y_4.5s_ease-in-out_infinite]",
   "object-contain object-center select-none motion-reduce:animate-none",
 ].join(" ");
@@ -18,35 +18,34 @@ export function AuthHeroPanel() {
     <section className={heroPanelClassName}>
       <AuthHeroPattern />
 
-      <div className="relative z-1 flex h-full flex-col px-10 py-10">
+      <div className="relative z-10 flex h-full flex-col px-8 py-8 lg:px-10 lg:py-10">
         <div>
-          <p className="mb-3 font-mono text-xs font-semibold uppercase tracking-[0.28em] text-muted">
+          <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.24em] text-muted">
             Secure gateway
           </p>
 
-          <h2 className="font-mono text-3xl font-semibold uppercase tracking-[0.06em] text-foreground">
+          <h2 className="font-mono text-2xl font-semibold uppercase tracking-[0.04em] text-foreground lg:text-3xl">
             Open {APP_NAME}
           </h2>
 
-          <p className="mt-4 max-w-lg font-mono text-sm font-medium leading-relaxed text-muted">
-            Chats, photos, and reactions stay in sync — sign in to continue.
+          <p className="mt-3 max-w-md font-mono text-[13px] leading-6 text-muted lg:text-sm">
+            Chats, photos and reactions stay perfectly in sync.
+            Sign in to continue your conversations securely.
           </p>
         </div>
 
-        <div className="flex flex-1 items-center justify-center">
+        <div className="flex flex-1 items-center justify-center py-4">
           <img
             src="/auth.png"
             alt=""
-            width={640}
-            height={640}
-            className={heroImageClassName}
+            className="w-64 lg:w-72 xl:w-80 object-contain"
             draggable={false}
             decoding="async"
           />
         </div>
 
-        <p className="font-mono text-xs font-medium uppercase tracking-[0.18em] text-muted">
-          End-to-end session · Encrypted in transit
+        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+          End-to-end encrypted · Private by design
         </p>
       </div>
     </section>

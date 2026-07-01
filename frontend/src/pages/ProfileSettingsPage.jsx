@@ -2,18 +2,24 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeftIcon,
   CameraIcon,
+  CheckIcon,
+  ChevronRightIcon,
   LoaderIcon,
   LogOutIcon,
+  MailIcon,
   MoonIcon,
   MonitorIcon,
-  SaveIcon,
+  PhoneIcon,
+  ShieldIcon,
   SunIcon,
   Trash2Icon,
+  UserIcon,
+  CalendarIcon,
+  PaletteIcon,
 } from "lucide-react";
 import { Link, Navigate } from "react-router";
 
 import { DeleteAccountModal } from "../components/profile/DeleteAccountModal";
-import { ProfileField, TextArea, TextInput } from "../components/profile/ProfileField";
 import { getInitials } from "../hooks/useSelectedConversation";
 import { useAuthStore } from "../store/useAuthStore";
 import { useProfileStore } from "../store/useProfileStore";
@@ -21,6 +27,7 @@ import { useTheme } from "../context/theme";
 
 function formatJoinDate(date) {
   if (!date) return "Not available";
+
   return new Date(date).toLocaleDateString([], {
     day: "numeric",
     month: "long",
@@ -29,14 +36,210 @@ function formatJoinDate(date) {
 }
 
 function readProvider(provider) {
-  return String(provider || "password").replace(/^oauth_/, "").replaceAll("_", " ");
+  return String(provider || "password")
+    .replace(/^oauth_/, "")
+    .replaceAll("_", " ");
+}
+
+function SettingSection({ title, children }) {
+  return (
+    <section className="border-b border-border py-3">
+      {title && (
+        <h2 className="px-4 pb-2 text-xs font-semibold uppercase tracking-wide text-accent">
+          {title}
+        </h2>
+      )}
+      <div>{children}</div>
+    </section>
+  );
+}
+
+function SettingRow({
+  icon: Icon,
+  label,
+  value,
+  danger = false,
+  onClick,
+  rightElement,
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-surface"
+    >
+      {Icon && (
+        <span
+          className={`grid size-10 shrink-0 place-items-center rounded-full ${
+            danger
+              ? "bg-red-500/10 text-red-500"
+              : "bg-accent-soft text-accent"
+          }`}
+        >
+          <Icon className="size-5" />
+        </span>
+      )}
+
+      <span className="min-w-0 flex-1 border-b border-border/70 pb-3">
+        <span
+          className={`block text-sm font-medium ${
+            danger ? "text-red-500" : "text-foreground"
+          }`}
+        >
+          {label}
+        </span>
+
+        {value && (
+          <span className="mt-0.5 block truncate text-sm text-muted">
+            {value}
+          </span>
+        )}
+      </span>
+
+      {rightElement ?? (
+        <ChevronRightIcon className="size-4 shrink-0 text-muted" />
+      )}
+    </button>
+  );
+}
+
+function EditFieldModal({
+  open,
+  title,
+  value,
+  multiline = false,
+  maxLength,
+  onClose,
+  onSave,
+}) {
+  const [localValue, setLocalValue] = useState(value || "");
+
+  useEffect(() => {
+    setLocalValue(value || "");
+  }, [value, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-background">
+      <header className="flex h-16 items-center gap-3 border-b border-border px-4">
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid size-10 place-items-center rounded-full hover:bg-surface"
+        >
+          <ArrowLeftIcon className="size-5" />
+        </button>
+
+        <h2 className="flex-1 text-lg font-semibold">{title}</h2>
+
+        <button
+          type="button"
+          onClick={() => onSave(localValue.trim())}
+          className="grid size-10 place-items-center rounded-full bg-accent text-accent-foreground"
+        >
+          <CheckIcon className="size-5" />
+        </button>
+      </header>
+
+      <main className="mx-auto w-full max-w-xl px-4 py-6">
+        {multiline ? (
+          <textarea
+            autoFocus
+            maxLength={maxLength}
+            value={localValue}
+            onChange={(event) => setLocalValue(event.target.value)}
+            className="min-h-32 w-full resize-none rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
+            placeholder="Write something..."
+          />
+        ) : (
+          <input
+            autoFocus
+            value={localValue}
+            onChange={(event) => setLocalValue(event.target.value)}
+            className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
+          />
+        )}
+
+        {maxLength && (
+          <p className="mt-2 text-right text-xs text-muted">
+            {localValue.length}/{maxLength}
+          </p>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function ThemeModal({ open, currentTheme, onClose, onSelect }) {
+  if (!open) return null;
+
+  const options = [
+    { id: "light", label: "Light", icon: SunIcon },
+    { id: "dark", label: "Dark", icon: MoonIcon },
+    { id: "system", label: "System default", icon: MonitorIcon },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40">
+      <div className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-background p-4 shadow-2xl">
+        <div className="mx-auto max-w-xl">
+          <h2 className="px-2 pb-3 text-lg font-semibold">Choose theme</h2>
+
+          <div className="overflow-hidden rounded-2xl border border-border">
+            {options.map((option) => {
+              const Icon = option.icon;
+              const selected = currentTheme === option.id;
+
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => {
+                    onSelect(option.id);
+                    onClose();
+                  }}
+                  className="flex w-full items-center gap-4 border-b border-border px-4 py-4 last:border-b-0 hover:bg-surface"
+                >
+                  <Icon className="size-5 text-accent" />
+                  <span className="flex-1 text-left text-sm font-medium">
+                    {option.label}
+                  </span>
+
+                  <span
+                    className={`grid size-5 place-items-center rounded-full border ${
+                      selected ? "border-accent" : "border-muted"
+                    }`}
+                  >
+                    {selected && (
+                      <span className="size-3 rounded-full bg-accent" />
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-4 w-full rounded-full bg-surface px-4 py-3 text-sm font-semibold"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function ProfileSettingsPage() {
   const authUser = useAuthStore((state) => state.authUser);
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const logout = useAuthStore((state) => state.logout);
+
   const { themePreference, setTheme } = useTheme();
+
   const {
     profile,
     isProfileLoading,
@@ -47,46 +250,57 @@ export default function ProfileSettingsPage() {
     deleteProfile,
   } = useProfileStore();
 
-  const [draft, setDraft] = useState(null);
   const [photoFile, setPhotoFile] = useState(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [themeModalOpen, setThemeModalOpen] = useState(false);
+  const [editField, setEditField] = useState(null);
 
   useEffect(() => {
     getProfile();
   }, [getProfile]);
 
-  const form = {
-    fullName: draft?.fullName ?? profile?.fullName ?? "",
-    username: draft?.username ?? profile?.username ?? "",
-    bio: draft?.bio ?? profile?.bio ?? "",
-  };
-
   const photoPreview = useMemo(
     () => (photoFile ? URL.createObjectURL(photoFile) : profile?.profilePic || ""),
-    [photoFile, profile?.profilePic],
+    [photoFile, profile?.profilePic]
   );
 
-  useEffect(() => () => {
-    if (photoFile && photoPreview) URL.revokeObjectURL(photoPreview);
+  useEffect(() => {
+    return () => {
+      if (photoFile && photoPreview) URL.revokeObjectURL(photoPreview);
+    };
   }, [photoFile, photoPreview]);
 
   if (!authUser) return <Navigate to="/auth" replace />;
 
-  const hasChanges =
-    photoFile ||
-    form.fullName !== (profile?.fullName || "") ||
-    form.username !== (profile?.username || "") ||
-    form.bio !== (profile?.bio || "");
+  const handlePhotoChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-  const handleSave = async () => {
+    setPhotoFile(file);
+
     const updatedProfile = await updateProfile({
-      ...form,
-      profilePic: photoFile,
+      fullName: profile?.fullName || "",
+      username: profile?.username || "",
+      bio: profile?.bio || "",
+      profilePic: file,
     });
+
     if (updatedProfile) {
       setPhotoFile(null);
-      setDraft(null);
     }
+  };
+
+  const handleFieldSave = async (value) => {
+    if (!editField) return;
+
+    await updateProfile({
+      fullName: profile?.fullName || "",
+      username: profile?.username || "",
+      bio: profile?.bio || "",
+      [editField.key]: value,
+    });
+
+    setEditField(null);
   };
 
   const handleLogout = async () => {
@@ -99,189 +313,199 @@ export default function ProfileSettingsPage() {
     clearAuth();
   };
 
+  const themeLabel =
+    themePreference === "system"
+      ? "System default"
+      : themePreference === "dark"
+        ? "Dark"
+        : "Light";
+
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <main className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="flex items-center gap-3 border-b border-border pb-4">
-          <Link
-            to="/"
-            className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-surface"
-            aria-label="Back to chat"
-          >
-            <ArrowLeftIcon className="size-5" />
-          </Link>
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-xl font-semibold">Profile & Settings</h1>
-            <p className="text-sm text-muted">Manage your Lark identity and preferences.</p>
-          </div>
-        </header>
+      <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur">
+        <Link
+          to="/"
+          className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-surface"
+          aria-label="Back to chat"
+        >
+          <ArrowLeftIcon className="size-5" />
+        </Link>
 
-        {isProfileLoading ? (
-          <div className="grid flex-1 place-items-center">
-            <LoaderIcon className="size-7 animate-spin text-accent" />
-          </div>
-        ) : (
-          <div className="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-            <section className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                <div className="relative size-28 shrink-0">
-                  <div className="grid size-28 overflow-hidden rounded-full bg-accent-soft text-3xl font-semibold text-accent">
-                    {photoPreview ? (
-                      <img src={photoPreview} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="place-self-center">
-                        {getInitials(profile?.fullName || authUser.fullName)}
-                      </span>
-                    )}
-                  </div>
-                  <label className="absolute bottom-0 right-0 grid size-10 cursor-pointer place-items-center rounded-full bg-accent text-accent-foreground shadow-lg">
-                    <CameraIcon className="size-5" aria-hidden />
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="sr-only"
-                      onChange={(event) => setPhotoFile(event.target.files?.[0] || null)}
-                    />
-                  </label>
-                </div>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-xl font-semibold">Settings</h1>
+        </div>
 
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-lg font-semibold">{profile?.fullName}</h2>
-                  <p className="truncate text-sm text-muted">@{profile?.username}</p>
-                  <p className="mt-2 max-w-xl text-sm text-muted">
-                    Choose a clear photo and username so friends can recognize you in chats.
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                <ProfileField label="Full name">
-                  <TextInput
-                    value={form.fullName}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...form, ...current, fullName: event.target.value }))
-                    }
-                  />
-                </ProfileField>
-
-                <ProfileField label="Username">
-                  <TextInput
-                    value={form.username}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...form, ...current, username: event.target.value }))
-                    }
-                  />
-                </ProfileField>
-
-                <div className="sm:col-span-2">
-                  <ProfileField label="Bio">
-                    <TextArea
-                      maxLength={160}
-                      value={form.bio}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...form, ...current, bio: event.target.value }))
-                      }
-                      placeholder="Write a short status or bio..."
-                    />
-                  </ProfileField>
-                  <p className="mt-1 text-right text-xs text-muted">{form.bio.length}/160</p>
-                </div>
-              </div>
-
-              <div className="mt-5 flex justify-end">
-                <button
-                  type="button"
-                  disabled={!hasChanges || isProfileSaving}
-                  onClick={handleSave}
-                  className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isProfileSaving ? (
-                    <LoaderIcon className="size-4 animate-spin" />
-                  ) : (
-                    <SaveIcon className="size-4" />
-                  )}
-                  Save changes
-                </button>
-              </div>
-            </section>
-
-            <aside className="space-y-4">
-              <section className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-                <h2 className="text-base font-semibold">Account</h2>
-                <dl className="mt-3 space-y-3 text-sm">
-                  <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Email</dt>
-                    <dd className="mt-0.5 break-words">{profile?.email}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Phone</dt>
-                    <dd className="mt-0.5">{profile?.phoneNumber || "Not available"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Joined</dt>
-                    <dd className="mt-0.5">{formatJoinDate(profile?.createdAt)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs uppercase tracking-wide text-muted">Provider</dt>
-                    <dd className="mt-0.5 capitalize">{readProvider(profile?.authProvider)}</dd>
-                  </div>
-                </dl>
-              </section>
-
-              <section className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-                <h2 className="text-base font-semibold">Theme</h2>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  {[
-                    { id: "light", label: "Light", icon: SunIcon },
-                    { id: "dark", label: "Dark", icon: MoonIcon },
-                    { id: "system", label: "System", icon: MonitorIcon },
-                  ].map((option) => {
-                    const Icon = option.icon;
-                    const selected = themePreference === option.id;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => setTheme(option.id)}
-                        className={`flex flex-col items-center gap-1 rounded-xl border px-2 py-3 text-xs font-semibold ${
-                          selected
-                            ? "border-accent bg-accent-soft text-accent"
-                            : "border-border hover:bg-surface"
-                        }`}
-                      >
-                        <Icon className="size-4" />
-                        {option.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-                <h2 className="text-base font-semibold">Session</h2>
-                <div className="mt-3 space-y-2">
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold hover:bg-surface"
-                  >
-                    <LogOutIcon className="size-4" />
-                    Logout
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDeleteModalOpen(true)}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-red-500 hover:bg-red-500/10"
-                  >
-                    <Trash2Icon className="size-4" />
-                    Delete account
-                  </button>
-                </div>
-              </section>
-            </aside>
-          </div>
+        {isProfileSaving && (
+          <LoaderIcon className="size-5 animate-spin text-accent" />
         )}
-      </main>
+      </header>
+
+      {isProfileLoading ? (
+        <main className="grid min-h-[calc(100dvh-4rem)] place-items-center">
+          <LoaderIcon className="size-7 animate-spin text-accent" />
+        </main>
+      ) : (
+        <main className="mx-auto min-h-[calc(100dvh-4rem)] w-full max-w-2xl">
+          <section className="flex flex-col items-center border-b border-border px-4 py-8">
+            <div className="relative size-24">
+              <div className="grid size-24 overflow-hidden rounded-full bg-accent-soft text-3xl font-semibold text-accent">
+                {photoPreview ? (
+                  <img
+                    src={photoPreview}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="place-self-center">
+                    {getInitials(profile?.fullName || authUser.fullName)}
+                  </span>
+                )}
+              </div>
+
+              <label className="absolute bottom-0 right-0 grid size-9 cursor-pointer place-items-center rounded-full bg-accent text-accent-foreground shadow-lg">
+                <CameraIcon className="size-4" />
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={handlePhotoChange}
+                />
+              </label>
+            </div>
+
+            <h2 className="mt-4 text-xl font-semibold">
+              {profile?.fullName || authUser.fullName}
+            </h2>
+
+            <p className="mt-1 text-sm text-muted">@{profile?.username}</p>
+
+            {profile?.bio && (
+              <p className="mt-3 max-w-sm text-center text-sm text-muted">
+                {profile.bio}
+              </p>
+            )}
+          </section>
+
+          <SettingSection title="Profile">
+            <SettingRow
+              icon={UserIcon}
+              label="Name"
+              value={profile?.fullName || "Add your name"}
+              onClick={() =>
+                setEditField({
+                  key: "fullName",
+                  title: "Edit name",
+                  value: profile?.fullName || "",
+                })
+              }
+            />
+
+            <SettingRow
+              icon={UserIcon}
+              label="Username"
+              value={profile?.username ? `@${profile.username}` : "Add username"}
+              onClick={() =>
+                setEditField({
+                  key: "username",
+                  title: "Edit username",
+                  value: profile?.username || "",
+                })
+              }
+            />
+
+            <SettingRow
+              icon={UserIcon}
+              label="Bio"
+              value={profile?.bio || "Add a short bio"}
+              onClick={() =>
+                setEditField({
+                  key: "bio",
+                  title: "Edit bio",
+                  value: profile?.bio || "",
+                  multiline: true,
+                  maxLength: 160,
+                })
+              }
+            />
+          </SettingSection>
+
+          <SettingSection title="Account">
+            <SettingRow
+              icon={MailIcon}
+              label="Email"
+              value={profile?.email || "Not available"}
+              rightElement={null}
+            />
+
+            <SettingRow
+              icon={PhoneIcon}
+              label="Phone"
+              value={profile?.phoneNumber || "Not available"}
+              rightElement={null}
+            />
+
+            <SettingRow
+              icon={CalendarIcon}
+              label="Joined"
+              value={formatJoinDate(profile?.createdAt)}
+              rightElement={null}
+            />
+
+            <SettingRow
+              icon={ShieldIcon}
+              label="Login provider"
+              value={readProvider(profile?.authProvider)}
+              rightElement={null}
+            />
+          </SettingSection>
+
+          <SettingSection title="Appearance">
+            <SettingRow
+              icon={PaletteIcon}
+              label="Theme"
+              value={themeLabel}
+              onClick={() => setThemeModalOpen(true)}
+            />
+          </SettingSection>
+
+          <SettingSection title="Session">
+            <SettingRow
+              icon={LogOutIcon}
+              label="Logout"
+              onClick={handleLogout}
+              rightElement={null}
+            />
+          </SettingSection>
+
+          <SettingSection title="Danger zone">
+            <SettingRow
+              icon={Trash2Icon}
+              label="Delete account"
+              value="This action cannot be undone"
+              danger
+              onClick={() => setDeleteModalOpen(true)}
+              rightElement={null}
+            />
+          </SettingSection>
+        </main>
+      )}
+
+      <EditFieldModal
+        open={Boolean(editField)}
+        title={editField?.title}
+        value={editField?.value}
+        multiline={editField?.multiline}
+        maxLength={editField?.maxLength}
+        onClose={() => setEditField(null)}
+        onSave={handleFieldSave}
+      />
+
+      <ThemeModal
+        open={themeModalOpen}
+        currentTheme={themePreference}
+        onClose={() => setThemeModalOpen(false)}
+        onSelect={setTheme}
+      />
 
       <DeleteAccountModal
         isOpen={deleteModalOpen}
