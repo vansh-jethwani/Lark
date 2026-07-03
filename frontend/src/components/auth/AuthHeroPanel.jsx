@@ -38,7 +38,7 @@ export function AuthHeroPanel() {
           <img
             src="/auth.png"
             alt=""
-            className="w-64 lg:w-72 xl:w-80 object-contain"
+            className={heroImageClassName}
             draggable={false}
             decoding="async"
           />

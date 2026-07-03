@@ -4,10 +4,6 @@ import { useState } from "react";
 import { AppLogo } from "../AppLogo";
 import { AvatarWithOnlineIndicator } from "./AvatarWithOnlineIndicator";
 
-import { ThemePresetPicker } from "../ThemePresetPicker";
-
-import { ThemeToggle } from "../ThemeToggle";
-
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
 
@@ -70,12 +66,6 @@ export function ChatHeader() {
       )}
 
       <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-0.5 sm:gap-1">
-        <div className="hidden min-[400px]:contents">
-          <ThemePresetPicker />
-        </div>
-
-        <ThemeToggle />
-
         {activeConversation ? (
           searchOpen ? (
             <div className="flex min-w-[180px] items-center gap-1 rounded-full border border-border bg-surface px-2 py-1">

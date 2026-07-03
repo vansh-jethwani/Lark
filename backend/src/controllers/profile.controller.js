@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
@@ -87,12 +88,60 @@ export async function updateProfile(req, res) {
   }
 }
 
+export async function updatePassword(req, res) {
+  try {
+    const currentPassword = String(req.body.currentPassword || "");
+    const newPassword = String(req.body.newPassword || "");
+    const confirmPassword = String(req.body.confirmPassword || "");
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ message: "All password fields are required." });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters." });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: "New password and confirmation do not match." });
+    }
+
+    const user = await User.findById(req.userId).select("+password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Current password is incorrect." });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12);
+    await user.save();
+
+    res.status(200).json({ message: "Password updated." });
+  } catch (error) {
+    console.log("Error in updatePassword:", error.message);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
 export async function deleteProfile(req, res) {
   try {
-    const { confirmation } = req.body;
+    const password = String(req.body.password || "");
 
-    if (confirmation !== "DELETE") {
-      return res.status(400).json({ message: "Type DELETE to confirm account deletion." });
+    if (!password) {
+      return res.status(400).json({ message: "Account password is required." });
+    }
+
+    const user = await User.findById(req.userId).select("+password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Incorrect account password." });
     }
 
     await Message.deleteMany({

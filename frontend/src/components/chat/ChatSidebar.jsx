@@ -7,7 +7,7 @@ import {Tooltip} from "@heroui/react";
 import { AI_USER, AI_USER_ID } from "../../data/aiUser";
 
 import { SearchField, Tabs } from "@heroui/react";
-import { MessageSquareIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import { MessageSquareIcon, UsersIcon } from "lucide-react";
 import { Link } from "react-router";
 import { ConversationRow } from "./ConversationRow";
 

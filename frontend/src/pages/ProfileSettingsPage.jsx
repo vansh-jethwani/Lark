@@ -5,17 +5,18 @@ import {
   CheckIcon,
   ChevronRightIcon,
   LoaderIcon,
+  LockIcon,
   LogOutIcon,
   MailIcon,
   MoonIcon,
   MonitorIcon,
   PhoneIcon,
-  ShieldIcon,
   SunIcon,
   Trash2Icon,
   UserIcon,
   CalendarIcon,
   PaletteIcon,
+  XIcon,
 } from "lucide-react";
 import { Link, Navigate } from "react-router";
 
@@ -23,22 +24,19 @@ import { DeleteAccountModal } from "../components/profile/DeleteAccountModal";
 import { getInitials } from "../hooks/useSelectedConversation";
 import { useAuthStore } from "../store/useAuthStore";
 import { useProfileStore } from "../store/useProfileStore";
-import { useTheme } from "../context/theme";
+import { applyThemePresetToDocument, useTheme } from "../context/theme";
+import { HERO_UI_THEME_PRESETS } from "../data/herouiThemePresets";
 
 function formatJoinDate(date) {
   if (!date) return "Not available";
+  const parsedDate = new Date(date);
+  if (Number.isNaN(parsedDate.getTime())) return "Not available";
 
-  return new Date(date).toLocaleDateString([], {
+  return parsedDate.toLocaleDateString([], {
     day: "numeric",
     month: "long",
     year: "numeric",
   });
-}
-
-function readProvider(provider) {
-  return String(provider || "password")
-    .replace(/^oauth_/, "")
-    .replaceAll("_", " ");
 }
 
 function SettingSection({ title, children }) {
@@ -66,6 +64,7 @@ function SettingRow({
     <button
       type="button"
       onClick={onClick}
+      disabled={!onClick}
       className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-surface"
     >
       {Icon && (
@@ -97,9 +96,35 @@ function SettingRow({
       </span>
 
       {rightElement ?? (
-        <ChevronRightIcon className="size-4 shrink-0 text-muted" />
+        onClick ? <ChevronRightIcon className="size-4 shrink-0 text-muted" /> : null
       )}
     </button>
+  );
+}
+
+function PopupModal({ open, title, children, onClose, footer }) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background p-4 shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-border pb-3">
+          <h2 className="min-w-0 truncate text-lg font-semibold">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-surface"
+            aria-label={`Close ${title}`}
+          >
+            <XIcon className="size-5" />
+          </button>
+        </div>
+
+        <div className="py-4">{children}</div>
+
+        {footer && <div className="flex justify-end gap-2 pt-1">{footer}</div>}
+      </div>
+    </div>
   );
 }
 
@@ -114,35 +139,33 @@ function EditFieldModal({
 }) {
   const [localValue, setLocalValue] = useState(value || "");
 
-  useEffect(() => {
-    setLocalValue(value || "");
-  }, [value, open]);
-
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-background">
-      <header className="flex h-16 items-center gap-3 border-b border-border px-4">
-        <button
-          type="button"
-          onClick={onClose}
-          className="grid size-10 place-items-center rounded-full hover:bg-surface"
-        >
-          <ArrowLeftIcon className="size-5" />
-        </button>
-
-        <h2 className="flex-1 text-lg font-semibold">{title}</h2>
-
-        <button
-          type="button"
-          onClick={() => onSave(localValue.trim())}
-          className="grid size-10 place-items-center rounded-full bg-accent text-accent-foreground"
-        >
-          <CheckIcon className="size-5" />
-        </button>
-      </header>
-
-      <main className="mx-auto w-full max-w-xl px-4 py-6">
+    <PopupModal
+      open={open}
+      title={title}
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full px-4 py-2 text-sm font-semibold hover:bg-surface"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(localValue.trim())}
+            className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground"
+          >
+            <CheckIcon className="size-4" />
+            Save
+          </button>
+        </>
+      }
+    >
         {multiline ? (
           <textarea
             autoFocus
@@ -166,8 +189,7 @@ function EditFieldModal({
             {localValue.length}/{maxLength}
           </p>
         )}
-      </main>
-    </div>
+    </PopupModal>
   );
 }
 
@@ -181,55 +203,217 @@ function ThemeModal({ open, currentTheme, onClose, onSelect }) {
   ];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40">
-      <div className="absolute bottom-0 left-0 right-0 rounded-t-3xl bg-background p-4 shadow-2xl">
-        <div className="mx-auto max-w-xl">
-          <h2 className="px-2 pb-3 text-lg font-semibold">Choose theme</h2>
-
-          <div className="overflow-hidden rounded-2xl border border-border">
-            {options.map((option) => {
-              const Icon = option.icon;
-              const selected = currentTheme === option.id;
-
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => {
-                    onSelect(option.id);
-                    onClose();
-                  }}
-                  className="flex w-full items-center gap-4 border-b border-border px-4 py-4 last:border-b-0 hover:bg-surface"
-                >
-                  <Icon className="size-5 text-accent" />
-                  <span className="flex-1 text-left text-sm font-medium">
-                    {option.label}
-                  </span>
-
-                  <span
-                    className={`grid size-5 place-items-center rounded-full border ${
-                      selected ? "border-accent" : "border-muted"
-                    }`}
-                  >
-                    {selected && (
-                      <span className="size-3 rounded-full bg-accent" />
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background p-4 shadow-2xl">
+        <div className="flex items-center justify-between gap-3 pb-3">
+          <h2 className="text-lg font-semibold">Choose theme</h2>
           <button
             type="button"
             onClick={onClose}
-            className="mt-4 w-full rounded-full bg-surface px-4 py-3 text-sm font-semibold"
+            className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-surface"
+            aria-label="Close theme dialog"
           >
-            Cancel
+            <XIcon className="size-5" />
           </button>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-border">
+          {options.map((option) => {
+            const Icon = option.icon;
+            const selected = currentTheme === option.id;
+
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => {
+                  onSelect(option.id);
+                  onClose();
+                }}
+                className="flex w-full items-center gap-4 border-b border-border px-4 py-4 last:border-b-0 hover:bg-surface"
+              >
+                <Icon className="size-5 text-accent" />
+                <span className="flex-1 text-left text-sm font-medium">
+                  {option.label}
+                </span>
+
+                <span
+                  className={`grid size-5 place-items-center rounded-full border ${
+                    selected ? "border-accent" : "border-muted"
+                  }`}
+                >
+                  {selected && <span className="size-3 rounded-full bg-accent" />}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
+  );
+}
+
+function AccentThemeModal({ open, currentPreset, onClose, onSelect }) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-xl rounded-2xl border border-border bg-background p-4 shadow-2xl">
+        <div className="flex items-center justify-between gap-3 pb-3">
+          <h2 className="text-lg font-semibold">Accent theme</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid size-9 shrink-0 place-items-center rounded-full hover:bg-surface"
+            aria-label="Close accent theme dialog"
+          >
+            <XIcon className="size-5" />
+          </button>
+        </div>
+
+        <div className="grid max-h-[60dvh] grid-cols-3 gap-3 overflow-y-auto rounded-2xl border border-border p-3 sm:grid-cols-4">
+          {HERO_UI_THEME_PRESETS.map((preset) => {
+            const selected = currentPreset === preset.id;
+
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => {
+                  onSelect(preset.id);
+                  onClose();
+                }}
+                className={`relative flex flex-col items-center gap-2 rounded-xl p-2 text-center transition ${
+                  selected ? "bg-accent-soft ring-2 ring-accent" : "hover:bg-surface"
+                }`}
+                aria-pressed={selected}
+              >
+                <span className="relative">
+                  <span
+                    className="block size-14 rounded-full shadow-sm ring-1 ring-border"
+                    style={{ background: preset.swatch }}
+                  />
+
+                  {selected && (
+                    <span className="absolute -right-1 -top-1 grid size-5 place-items-center rounded-full bg-accent text-accent-foreground shadow">
+                      <CheckIcon className="size-3" strokeWidth={3} />
+                    </span>
+                  )}
+                </span>
+
+                <span className="text-xs font-medium text-foreground">
+                  {preset.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UpdatePasswordModal({ open, isSaving, onClose, onSave }) {
+  const [form, setForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [error, setError] = useState("");
+
+  if (!open) return null;
+
+  const clearAndClose = () => {
+    setForm({
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+    });
+    setError("");
+    onClose();
+  };
+
+  const updateField = (field, value) => {
+    setError("");
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
+      setError("All password fields are required.");
+      return;
+    }
+
+    if (form.newPassword.length < 8) {
+      setError("New password must be at least 8 characters.");
+      return;
+    }
+
+    if (form.newPassword !== form.confirmPassword) {
+      setError("New password and confirmation do not match.");
+      return;
+    }
+
+    const didUpdate = await onSave(form);
+    if (didUpdate) clearAndClose();
+  };
+
+  return (
+    <PopupModal
+      open={open}
+      title="Update password"
+      onClose={clearAndClose}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={clearAndClose}
+            className="rounded-full px-4 py-2 text-sm font-semibold hover:bg-surface"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isSaving}
+            className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? "Updating..." : "Update password"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <input
+          type="password"
+          value={form.currentPassword}
+          onChange={(event) => updateField("currentPassword", event.target.value)}
+          className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
+          placeholder="Old password"
+          autoComplete="current-password"
+        />
+
+        <input
+          type="password"
+          value={form.newPassword}
+          onChange={(event) => updateField("newPassword", event.target.value)}
+          className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
+          placeholder="New password"
+          autoComplete="new-password"
+        />
+
+        <input
+          type="password"
+          value={form.confirmPassword}
+          onChange={(event) => updateField("confirmPassword", event.target.value)}
+          className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
+          placeholder="Confirm new password"
+          autoComplete="new-password"
+        />
+
+        {error && <p className="text-sm text-red-500">{error}</p>}
+      </div>
+    </PopupModal>
   );
 }
 
@@ -238,21 +422,27 @@ export default function ProfileSettingsPage() {
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const logout = useAuthStore((state) => state.logout);
 
-  const { themePreference, setTheme } = useTheme();
+  const { themePreference, setTheme, themePreset, setThemePreset } = useTheme();
 
   const {
     profile,
     isProfileLoading,
     isProfileSaving,
+    isPasswordSaving,
     isDeletingAccount,
     getProfile,
     updateProfile,
+    updatePassword,
     deleteProfile,
   } = useProfileStore();
 
   const [photoFile, setPhotoFile] = useState(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [themeModalOpen, setThemeModalOpen] = useState(false);
+  const [accentThemeModalOpen, setAccentThemeModalOpen] = useState(false);
+  const [detailModal, setDetailModal] = useState(null);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [editField, setEditField] = useState(null);
 
   useEffect(() => {
@@ -293,22 +483,23 @@ export default function ProfileSettingsPage() {
   const handleFieldSave = async (value) => {
     if (!editField) return;
 
-    await updateProfile({
+    const updatedProfile = await updateProfile({
       fullName: profile?.fullName || "",
       username: profile?.username || "",
       bio: profile?.bio || "",
       [editField.key]: value,
     });
 
-    setEditField(null);
+    if (updatedProfile) setEditField(null);
   };
 
   const handleLogout = async () => {
+    setLogoutModalOpen(false);
     await logout();
   };
 
-  const handleDeleteAccount = async (confirmation) => {
-    const didDelete = await deleteProfile(confirmation);
+  const handleDeleteAccount = async (password) => {
+    const didDelete = await deleteProfile(password);
     if (!didDelete) return;
     clearAuth();
   };
@@ -319,6 +510,13 @@ export default function ProfileSettingsPage() {
       : themePreference === "dark"
         ? "Dark"
         : "Light";
+  const accentThemeLabel =
+    HERO_UI_THEME_PRESETS.find((preset) => preset.id === themePreset)?.label || "Default";
+
+  const handleAccentThemeSelect = (presetId) => {
+    applyThemePresetToDocument(presetId);
+    setThemePreset(presetId);
+  };
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -434,37 +632,62 @@ export default function ProfileSettingsPage() {
               icon={MailIcon}
               label="Email"
               value={profile?.email || "Not available"}
-              rightElement={null}
+              onClick={() =>
+                setDetailModal({
+                  title: "Email",
+                  label: "Email address",
+                  value: profile?.email || "Not available",
+                })
+              }
             />
 
             <SettingRow
               icon={PhoneIcon}
               label="Phone"
               value={profile?.phoneNumber || "Not available"}
-              rightElement={null}
+              onClick={() =>
+                setDetailModal({
+                  title: "Phone",
+                  label: "Phone number",
+                  value: profile?.phoneNumber || "Not available",
+                })
+              }
             />
 
             <SettingRow
               icon={CalendarIcon}
               label="Joined"
               value={formatJoinDate(profile?.createdAt)}
-              rightElement={null}
+              onClick={() =>
+                setDetailModal({
+                  title: "Joined",
+                  label: "Account created",
+                  value: formatJoinDate(profile?.createdAt),
+                })
+              }
             />
 
             <SettingRow
-              icon={ShieldIcon}
-              label="Login provider"
-              value={readProvider(profile?.authProvider)}
-              rightElement={null}
+              icon={LockIcon}
+              label="Password"
+              value="Update your account password"
+              onClick={() => setPasswordModalOpen(true)}
             />
           </SettingSection>
 
           <SettingSection title="Appearance">
             <SettingRow
               icon={PaletteIcon}
-              label="Theme"
+              label="Mode"
               value={themeLabel}
               onClick={() => setThemeModalOpen(true)}
+            />
+
+            <SettingRow
+              icon={PaletteIcon}
+              label="Accent theme"
+              value={accentThemeLabel}
+              onClick={() => setAccentThemeModalOpen(true)}
             />
           </SettingSection>
 
@@ -472,8 +695,7 @@ export default function ProfileSettingsPage() {
             <SettingRow
               icon={LogOutIcon}
               label="Logout"
-              onClick={handleLogout}
-              rightElement={null}
+              onClick={() => setLogoutModalOpen(true)}
             />
           </SettingSection>
 
@@ -491,6 +713,7 @@ export default function ProfileSettingsPage() {
       )}
 
       <EditFieldModal
+        key={editField?.key || "edit-field"}
         open={Boolean(editField)}
         title={editField?.title}
         value={editField?.value}
@@ -506,6 +729,70 @@ export default function ProfileSettingsPage() {
         onClose={() => setThemeModalOpen(false)}
         onSelect={setTheme}
       />
+
+      <AccentThemeModal
+        open={accentThemeModalOpen}
+        currentPreset={themePreset}
+        onClose={() => setAccentThemeModalOpen(false)}
+        onSelect={handleAccentThemeSelect}
+      />
+
+      <UpdatePasswordModal
+        open={passwordModalOpen}
+        isSaving={isPasswordSaving}
+        onClose={() => setPasswordModalOpen(false)}
+        onSave={updatePassword}
+      />
+
+      <PopupModal
+        open={Boolean(detailModal)}
+        title={detailModal?.title}
+        onClose={() => setDetailModal(null)}
+        footer={
+          <button
+            type="button"
+            onClick={() => setDetailModal(null)}
+            className="rounded-full bg-surface px-4 py-2 text-sm font-semibold"
+          >
+            Close
+          </button>
+        }
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-accent">
+          {detailModal?.label}
+        </p>
+        <p className="mt-2 break-words text-base text-foreground">
+          {detailModal?.value}
+        </p>
+      </PopupModal>
+
+      <PopupModal
+        open={logoutModalOpen}
+        title="Logout"
+        onClose={() => setLogoutModalOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setLogoutModalOpen(false)}
+              className="rounded-full px-4 py-2 text-sm font-semibold hover:bg-surface"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground"
+            >
+              Logout
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted">
+          You will be signed out of Lark on this device.
+        </p>
+      </PopupModal>
 
       <DeleteAccountModal
         isOpen={deleteModalOpen}

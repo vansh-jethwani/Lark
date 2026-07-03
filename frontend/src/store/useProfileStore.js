@@ -8,6 +8,7 @@ export const useProfileStore = create((set) => ({
   profile: null,
   isProfileLoading: false,
   isProfileSaving: false,
+  isPasswordSaving: false,
   isDeletingAccount: false,
 
   getProfile: async () => {
@@ -47,10 +48,28 @@ export const useProfileStore = create((set) => ({
     }
   },
 
-  deleteProfile: async (confirmation) => {
+  updatePassword: async ({ currentPassword, newPassword, confirmPassword }) => {
+    set({ isPasswordSaving: true });
+    try {
+      await axiosInstance.patch("/profile/password", {
+        currentPassword,
+        newPassword,
+        confirmPassword,
+      });
+      toast.success("Password updated");
+      return true;
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to update password");
+      return false;
+    } finally {
+      set({ isPasswordSaving: false });
+    }
+  },
+
+  deleteProfile: async (password) => {
     set({ isDeletingAccount: true });
     try {
-      await axiosInstance.delete("/profile", { data: { confirmation } });
+      await axiosInstance.delete("/profile", { data: { password } });
       toast.success("Account deleted");
       return true;
     } catch (error) {
