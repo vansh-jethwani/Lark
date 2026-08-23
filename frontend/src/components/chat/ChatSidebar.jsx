@@ -1,0 +1,184 @@
+import { getInitials, useSelectedConversation } from "../../hooks/useSelectedConversation";
+import { useAuthStore } from "../../store/useAuthStore";
+import { useChatStore } from "../../store/useChatStore";
+import { APP_NAME, AppLogo } from "../AppLogo";
+import { Avatar } from "@heroui/react";
+import {Tooltip} from "@heroui/react";
+import { AI_USER, AI_USER_ID } from "../../data/aiUser";
+
+import { SearchField, Tabs } from "@heroui/react";
+import { MessageSquareIcon, PhoneIcon } from "lucide-react";
+import { Link } from "react-router";
+import { ConversationRow } from "./ConversationRow";
+import { CallHistory } from "./CallPanel";
+
+function getLastMessagePreview(message) {
+  if (!message) return "";
+  if (message.text) return message.text;
+  if (message.image) return "Photo";
+  if (message.video) return "Video";
+  if (message.file) return message.fileName || "Document";
+  return "";
+}
+
+function mapUserForList(user, onlineUsers) {
+  return {
+    conversationId: user._id,
+    id: user._id,
+    name: user.fullName,
+    email: user.email,
+    avatarUrl: user.profilePic,
+    initials: getInitials(user.fullName),
+    isOnline: onlineUsers.includes(user._id),
+    lastMessagePreview: getLastMessagePreview(user.lastMessage),
+    lastMessageAt: user.lastMessageAt,
+    unreadCount: Number(user.unreadCount || 0),
+    peer: {
+      name: user.fullName,
+      avatarUrl: user.profilePic,
+      initials: getInitials(user.fullName),
+      isOnline: onlineUsers.includes(user._id),
+    },
+  };
+}
+
+function ChatSidebar() {
+  const conversations = useChatStore((state) => state.conversations);
+
+  const searchQuery = useChatStore((state) => state.searchQuery);
+  const setSearchQuery = useChatStore((state) => state.setSearchQuery);
+
+  const sidebarTab = useChatStore((state) => state.sidebarTab);
+  const setSidebarTab = useChatStore((state) => state.setSidebarTab);
+
+  const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
+
+  const onlineUsers = useAuthStore((state) => state.onlineUsers);
+  const authUser = useAuthStore((state) => state.authUser);
+
+  const { activeConversationId, isLargeScreen } = useSelectedConversation();
+
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+
+  const conversationUsers = [
+    {
+      ...AI_USER,
+      lastMessage: conversations.find((c) => c._id === AI_USER_ID)?.lastMessage,
+      lastMessageAt: conversations.find((c) => c._id === AI_USER_ID)?.lastMessageAt,
+      unreadCount: conversations.find((c) => c._id === AI_USER_ID)?.unreadCount || 0,
+    },
+    ...conversations.filter(
+      (conversation) =>
+        conversation._id !== AI_USER_ID &&
+        conversation.username !== "lark-ai" &&
+        conversation.email !== "ai@lark.app" &&
+        conversation.isAI !== true
+    ),
+  ].map((user) => mapUserForList(user, onlineUsers));
+  const filteredConversations = normalizedSearchQuery
+    ? conversationUsers.filter((conversation) =>
+      conversation.peer.name.toLowerCase().includes(normalizedSearchQuery),
+    )
+    : conversationUsers;
+
+  return (
+    <aside
+      className={`w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-72 ${!isLargeScreen && activeConversationId ? "hidden lg:flex" : "flex"
+        }`}
+    >
+      <div className="shrink-0 border-b border-border px-2 pb-2 pt-2.5 sm:px-3 sm:pt-3">
+        <div className="flex items-center gap-3 px-0.5 sm:gap-3 sm:px-1">
+          <Tooltip content="Lark AI">
+          <button
+            onClick={() => {
+              setSidebarTab("chats");
+              setSearchQuery("");
+              setActiveConversationId(AI_USER_ID);
+            }}
+            className="rounded-lg transition-transform hover:scale-105 active:scale-95"
+          >
+            <AppLogo
+              size={34}
+              className="size-9 shrink-0 rounded-lg"
+              alt="Lark AI"
+            />
+          </button>
+          </Tooltip>
+
+          <p className="flex-1 truncate text-lg font-bold tracking-tight sm:text-[22px]">
+            {APP_NAME}
+          </p>
+          <Link to="/profile" aria-label="Profile & Settings">
+            <Avatar className="size-8">
+              <Avatar.Image alt={authUser?.fullName} src={authUser?.profilePic} />
+              <Avatar.Fallback className="text-xs font-semibold">
+                {getInitials(authUser?.fullName)}
+              </Avatar.Fallback>
+            </Avatar>
+          </Link>
+        </div>
+      </div>
+
+      <Tabs
+        selectedKey={sidebarTab}
+        onSelectionChange={(key) => setSidebarTab(String(key))}
+        variant="secondary"
+        className="flex flex-1 flex-col overflow-y-auto"
+      >
+        <div className="shrink-0 border-b border-border px-3 pb-2 pt-2">
+          <SearchField
+            fullWidth
+            variant="secondary"
+            className="w-full"
+            value={searchQuery}
+            onChange={setSearchQuery}
+          >
+            <SearchField.Group className="rounded-xl">
+              <SearchField.SearchIcon />
+              <SearchField.Input aria-label="Search" placeholder="Search" />
+              {searchQuery ? <SearchField.ClearButton /> : null}
+            </SearchField.Group>
+          </SearchField>
+        </div>
+
+        <Tabs.ListContainer className="shrink-0 border-b border-border px-2 pb-2 pt-1">
+          <Tabs.List className="w-full gap-0.5">
+            <Tabs.Tab id="chats" className="flex-1 justify-center gap-1.5">
+              <MessageSquareIcon className="size-3.5 opacity-80" aria-hidden />
+              Chats
+            </Tabs.Tab>
+            <Tabs.Tab id="calls" className="flex-1 justify-center gap-1.5">
+              <PhoneIcon className="size-3.5 opacity-80" aria-hidden />
+              Calls
+            </Tabs.Tab>
+          </Tabs.List>
+        </Tabs.ListContainer>
+
+        <Tabs.Panel
+          id="chats"
+          className="flex-1 overflow-x-hidden overflow-y-auto outline-none"
+        >
+          {filteredConversations.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-muted">
+              No conversations match your search.
+            </p>
+          ) : (
+            filteredConversations.map((conversation) => (
+              <ConversationRow
+                key={conversation.id}
+                user={conversation}
+                selected={conversation.id === activeConversationId}
+                onSelect={() => setActiveConversationId(conversation.id)}
+              />
+            ))
+          )}
+        </Tabs.Panel>
+
+        <Tabs.Panel id="calls" className="flex-1 overflow-x-hidden overflow-y-auto outline-none">
+          <CallHistory onCall={(user, type) => window.dispatchEvent(new CustomEvent("lark:start-call", { detail: { user, type } }))} />
+        </Tabs.Panel>
+      </Tabs>
+    </aside>
+  );
+}
+export default ChatSidebar;
