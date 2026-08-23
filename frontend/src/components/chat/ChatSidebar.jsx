@@ -175,7 +175,7 @@ function ChatSidebar() {
         </Tabs.Panel>
 
         <Tabs.Panel id="calls" className="flex-1 overflow-x-hidden overflow-y-auto outline-none">
-          <CallHistory onCall={(user, type) => window.dispatchEvent(new CustomEvent("lark:start-call", { detail: { user, type } }))} />
+          <CallHistory />
         </Tabs.Panel>
       </Tabs>
     </aside>

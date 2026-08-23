@@ -1,5 +1,6 @@
 import express from "express";
 import protectRoute from "../middlewares/auth.middleware.js";
+import { getCallHistory } from "../controllers/call.controller.js";
 import { checkAuth, login, logout, resendEmailOtp, signup, verifyEmailOtp } from "../controllers/auth.controller.js";
 
 
@@ -11,6 +12,7 @@ router.post("/resend-email-otp", resendEmailOtp);
 router.post("/login", login);
 router.post("/logout", logout);
 router.get("/check", protectRoute, checkAuth)
+router.get("/calls", protectRoute, getCallHistory);
 
 
 export default router;
