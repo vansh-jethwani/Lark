@@ -505,6 +505,8 @@ export const useChatStore = create(
         socket.off("typing");
         socket.off("messagePinned");
         socket.off("messageReaction");
+        socket.off("messageEdited");
+        socket.off("messageDeleted");
 
         socket.on("typing", ({ senderId, isTyping }) => {
           set((state) => ({

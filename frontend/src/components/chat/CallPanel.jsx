@@ -13,7 +13,7 @@ const constraints = (type, facingMode = "user") => ({
 });
 const debug = (...args) => { if (import.meta.env.DEV) console.debug("[WEBRTC]", ...args); };
 
-import { addCallHistory, callStatusLabel, dateLabel, formatCallDuration, groupCallHistory, normalizeCallRecord, readCallHistory, timeLabel } from "../../lib/callHistory";
+import { addCallHistory, callStatusLabel, dateLabel, formatCallDuration, groupCallHistory, mergeCallHistory, normalizeCallRecord, readCallHistory, timeLabel } from "../../lib/callHistory";
 import { axiosInstance } from "../../lib/axios";
 export function CallHistory() {
   const users = useChatStore((state) => state.users);
@@ -21,8 +21,8 @@ export function CallHistory() {
   const authUser = useAuthStore((state) => state.authUser);
   const [history, setHistory] = useState(() => readCallHistory());
   const [expandedKey, setExpandedKey] = useState(null);
-  useEffect(() => { const refresh = () => setHistory(readCallHistory()); window.addEventListener("lark:call-history", refresh); return () => window.removeEventListener("lark:call-history", refresh); }, []);
-  useEffect(() => { axiosInstance.get("/auth/calls").then((response) => setHistory(response.data.map((record) => normalizeCallRecord(record, authUser?._id)))).catch(() => {}); }, [authUser?._id]);
+  useEffect(() => { const refresh = () => setHistory((current) => mergeCallHistory(current, readCallHistory())); window.addEventListener("lark:call-history", refresh); return () => window.removeEventListener("lark:call-history", refresh); }, []);
+  useEffect(() => { axiosInstance.get("/auth/calls").then((response) => setHistory((current) => mergeCallHistory(current, response.data.map((record) => normalizeCallRecord(record, authUser?._id))))).catch(() => {}); }, [authUser?._id]);
   const groups = useMemo(() => {
     const grouped = groupCallHistory(history);
     const query = searchQuery.trim().toLowerCase();
@@ -103,14 +103,14 @@ function dateTimeLabel(value) {
   return `${displayDate}, ${timeLabel(value).replace(/\s+/g, " ").toLowerCase()}`;
 }
 
-export function CallMessage({ entry }) {
-  return <CallHistoryDetail entry={entry} inChat />;
+export function CallMessage({ entry, isSelectionMode, isSelected, onToggleSelected, onStartSelection }) {
+  return <CallHistoryDetail entry={entry} inChat isSelectionMode={isSelectionMode} isSelected={isSelected} onToggleSelected={onToggleSelected} onStartSelection={onStartSelection} />;
 }
 
-function CallHistoryDetail({ entry, inChat = false }) {
+function CallHistoryDetail({ entry, inChat = false, isSelectionMode = false, isSelected = false, onToggleSelected, onStartSelection }) {
   const status = callStatusLabel(entry.status);
   const unsuccessful = isUnsuccessful(entry);
-  const [selected, setSelected] = useState(false);
+  const [localSelected, setLocalSelected] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const holdTimer = useRef(null);
@@ -126,11 +126,13 @@ function CallHistoryDetail({ entry, inChat = false }) {
       return;
     }
   };
-  const selectFromHold = () => { setSelected(true); setMenuOpen(false); };
+  const selected = inChat ? isSelected : localSelected;
+  const selectFromHold = () => { if (inChat) onStartSelection?.(entry.id); else setLocalSelected(true); setMenuOpen(false); };
   const startHold = () => { holdTimer.current = window.setTimeout(selectFromHold, 500); };
   const clearHold = () => { if (holdTimer.current) window.clearTimeout(holdTimer.current); };
-  const showMenu = (event) => { event.preventDefault(); setMenuPosition({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 140) }); setMenuOpen(true); };
-  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex max-w-[min(90%,28rem)] items-start gap-2 rounded-2xl px-3 py-2 text-xs shadow-sm ${inChat && entry.direction === "outgoing" ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "bg-danger/10" : "rounded-bl-md bg-surface"}`}><span className={unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}><CallDirectionIcon entry={entry} /></span><CallTypeIcon entry={entry} /><span className="min-w-0 flex-1"><span className={inChat && entry.direction === "outgoing" ? "text-accent-foreground" : "text-foreground"}>{callDescription(entry)}</span><span className={`block ${unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}`}>{status}{status === "Completed" && entry.duration ? ` · ${formatCallDuration(entry.duration)}` : ""} · {timeLabel(entry.createdAt)}</span></span>{selected ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
+  const showMenu = (event) => { event.preventDefault(); if (inChat && isSelectionMode) { onToggleSelected?.(entry.id); return; } setMenuPosition({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 140) }); setMenuOpen(true); };
+  const handleClick = () => { if (inChat && isSelectionMode) onToggleSelected?.(entry.id); };
+  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onClick={handleClick} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex max-w-[min(90%,28rem)] items-start gap-2 rounded-2xl px-3 py-2 text-xs shadow-sm ${inChat && entry.direction === "outgoing" ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "bg-danger/10" : "rounded-bl-md bg-surface"}`}><span className={unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}><CallDirectionIcon entry={entry} /></span><CallTypeIcon entry={entry} /><span className="min-w-0 flex-1"><span className={inChat && entry.direction === "outgoing" ? "text-accent-foreground" : "text-foreground"}>{callDescription(entry)}</span><span className={`block ${unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}`}>{status}{status === "Completed" && entry.duration ? ` · ${formatCallDuration(entry.duration)}` : ""} · {timeLabel(entry.createdAt)}</span></span>{selected && !inChat ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
 }
 
 function CallLogContextMenu({ position, onClose, onSelect, onDelete }) {
@@ -158,6 +160,7 @@ export function CallPanel() {
   const [facingMode, setFacingMode] = useState("user");
   const [statusText, setStatusText] = useState("");
   const [seconds, setSeconds] = useState(0);
+  const secondsRef = useRef(0);
   const callRef = useRef(null);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -202,10 +205,10 @@ export function CallPanel() {
   };
   const finish = (status = "completed") => {
     const current = callRef.current; if (!current) return;
-    addCallHistory({ peerId: current.peer.id, peerName: current.peer.name, peerAvatar: current.peer.avatar, type: current.type, direction: current.incoming ? "incoming" : "outgoing", status, duration: seconds });
+    addCallHistory({ callId: current.id, peerId: current.peer.id, peerName: current.peer.name, peerAvatar: current.peer.avatar, type: current.type, direction: current.incoming ? "incoming" : "outgoing", status, duration: secondsRef.current });
     localStreamRef.current?.getTracks().forEach((track) => track.stop()); peerRef.current?.close();
     if (ringAudioRef.current) { ringAudioRef.current.pause(); ringAudioRef.current.currentTime = 0; }
-    candidateQueueRef.current = []; localStreamRef.current = null; remoteStreamRef.current = null; peerRef.current = null; setCurrentCall(null); setMinimized(false); setMaximized(false); setSeconds(0); setMuted(false); setCameraOff(false);
+    candidateQueueRef.current = []; localStreamRef.current = null; remoteStreamRef.current = null; peerRef.current = null; setCurrentCall(null); setMinimized(false); setMaximized(false); secondsRef.current = 0; setSeconds(0); setMuted(false); setCameraOff(false);
   };
   const startCall = async (user, type) => {
     if (callRef.current || !socket) return;
@@ -225,7 +228,7 @@ export function CallPanel() {
   // Handlers intentionally use ref-backed call state and stable media helpers.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, users]);
-  useEffect(() => { if (call?.status !== "connected") return undefined; const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000); return () => window.clearInterval(timer); }, [call?.status]);
+  useEffect(() => { if (call?.status !== "connected") return undefined; const timer = window.setInterval(() => setSeconds((value) => { const next = value + 1; secondsRef.current = next; return next; }), 1000); return () => window.clearInterval(timer); }, [call?.status]);
   useEffect(() => { if (call?.status !== "calling" && call?.status !== "ringing") return undefined; const audio = ringAudioRef.current; audio?.play().catch(() => {}); return () => { if (audio) { audio.pause(); audio.currentTime = 0; } }; }, [call?.status]);
   useEffect(() => { if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current; }, [call]);
   const accept = async () => { try { localStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints(call.type)); createPeer(call.peer); socket.emit("call:accept", { receiverId: call.peer.id, callId: call.id }); setCurrentCall({ ...callRef.current, status: "connecting", incoming: false }); } catch (error) { showMediaError(error); } };

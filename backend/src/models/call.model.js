@@ -15,11 +15,13 @@ const callSchema = new mongoose.Schema(
     answeredAt: Date,
     endedAt: Date,
     duration: { type: Number, default: 0, min: 0 },
+    deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
   { timestamps: true },
 );
 
 callSchema.index({ caller: 1, createdAt: -1 });
 callSchema.index({ receiver: 1, createdAt: -1 });
+callSchema.index({ deletedFor: 1 });
 
 export default mongoose.model("Call", callSchema);

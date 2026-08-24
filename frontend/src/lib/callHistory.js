@@ -9,9 +9,19 @@ export function readCallHistory() {
   }
 }
 
+export function mergeCallHistory(...histories) {
+  const records = new Map();
+  histories.flat().forEach((entry) => {
+    if (!entry) return;
+    records.set(entry.callId || entry.id, { ...records.get(entry.callId || entry.id), ...entry });
+  });
+  return [...records.values()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
 export function addCallHistory(entry) {
   const history = readCallHistory();
-  const next = { ...entry, id: entry.id || crypto.randomUUID(), createdAt: entry.createdAt || new Date().toISOString() };
+  const callId = entry.callId || crypto.randomUUID();
+  const next = { ...entry, callId, id: entry.id || `call:${callId}`, createdAt: entry.createdAt || new Date().toISOString() };
   localStorage.setItem(CALL_HISTORY_KEY, JSON.stringify([next, ...history].slice(0, 100)));
   window.dispatchEvent(new Event("lark:call-history"));
   return next;
@@ -31,7 +41,8 @@ export function normalizeCallRecord(record, currentUserId) {
     ? Math.max(0, Math.floor((new Date(record.endedAt) - new Date(record.answeredAt)) / 1000))
     : 0);
   return {
-    id: record._id || record.id,
+    id: `call:${record.callId || record._id || record.id}`,
+    serverId: record._id || record.serverId || null,
     callId: record.callId,
     peerId: peer?._id || peer,
     peerName: peer?.fullName || record.peerName || "Unknown user",
@@ -48,7 +59,7 @@ export function groupCallHistory(history) {
   const groups = new Map();
   for (const entry of history) {
     if (!entry?.peerId || !entry.createdAt) continue;
-    const key = `${entry.peerId}:${localDateKey(entry.createdAt)}`;
+    const key = `${entry.peerId}:${localDateKey(entry.createdAt)}:${entry.type || "audio"}`;
     const group = groups.get(key) || { key, peerId: entry.peerId, entries: [] };
     group.entries.push(entry);
     groups.set(key, group);

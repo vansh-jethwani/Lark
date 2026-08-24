@@ -15,7 +15,7 @@ import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SelectionBar } from "./SelectionBar";
 import { formatMessageDate, getMessageDateKey } from "../../lib/utils";
 import { CallMessage } from "./CallPanel";
-import { normalizeCallRecord, readCallHistory } from "../../lib/callHistory";
+import { mergeCallHistory, normalizeCallRecord, readCallHistory } from "../../lib/callHistory";
 import { axiosInstance } from "../../lib/axios";
 import { useAuthStore } from "../../store/useAuthStore";
 
@@ -51,10 +51,22 @@ export function MessageList() {
   const currentPinnedMessage = pinnedMessages[safePinnedIndex];
   const showPinnedBanner =
     pinnedTotal > 0 && !hiddenPinnedBannerConversationIds.includes(activeConversationId);
+  const timeline = useMemo(() => {
+    if (!activeConversation) return [];
+    const calls = callHistory
+      .filter((entry) => String(entry.peerId) === String(activeConversationId))
+      .map((entry) => ({ ...entry, timelineType: "call" }));
+    return [...activeConversation.messages.map((message) => ({ ...message, timelineType: "message" })), ...calls]
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  }, [activeConversation, activeConversationId, callHistory]);
   const isSelectionActive = selectionMode && selectionConversationId === activeConversationId;
   const selectableMessages = activeConversation?.messages || [];
+  const selectableTimeline = timeline;
   const selectedMessages = selectableMessages.filter((message) =>
     isSelectionActive && selectedMessageIds.includes(message.id),
+  );
+  const selectedCalls = selectableTimeline.filter((item) =>
+    isSelectionActive && item.timelineType === "call" && selectedMessageIds.includes(item.id),
   );
   const canDeleteForEveryone =
     selectedMessages.length > 0 && selectedMessages.every((message) => message.role === "me");
@@ -65,17 +77,8 @@ export function MessageList() {
     : [];
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const currentSearchMatch = searchMatches[currentSearchIndex];
-  const timeline = useMemo(() => {
-    if (!activeConversation) return [];
-    const calls = callHistory
-      .filter((entry) => String(entry.peerId) === String(activeConversationId))
-      .map((entry) => ({ ...entry, timelineType: "call" }));
-    return [...activeConversation.messages.map((message) => ({ ...message, timelineType: "message" })), ...calls]
-      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-  }, [activeConversation, activeConversationId, callHistory]);
-
   useEffect(() => {
-    const refresh = () => setCallHistory(readCallHistory());
+    const refresh = () => setCallHistory((current) => mergeCallHistory(current, readCallHistory()));
     window.addEventListener("lark:call-history", refresh);
     return () => window.removeEventListener("lark:call-history", refresh);
   }, []);
@@ -83,7 +86,7 @@ export function MessageList() {
   useEffect(() => {
     if (!authUser?._id) return undefined;
     axiosInstance.get("/auth/calls")
-      .then((response) => setCallHistory(response.data.map((record) => normalizeCallRecord(record, authUser._id))))
+      .then((response) => setCallHistory((current) => mergeCallHistory(current, response.data.map((record) => normalizeCallRecord(record, authUser._id)))))
       .catch(() => {});
     return undefined;
   }, [authUser?._id]);
@@ -165,9 +168,9 @@ export function MessageList() {
 
   const toggleSelectAll = () => {
     setSelectedMessageIds((current) =>
-      current.length === selectableMessages.length
+      current.length === selectableTimeline.length
         ? []
-        : selectableMessages.map((message) => message.id),
+        : selectableTimeline.map((item) => item.id),
     );
   };
 
@@ -180,8 +183,26 @@ export function MessageList() {
   };
 
   const handleDeleteSelected = async (type) => {
-    const didDelete = await deleteMessages(selectedMessageIds, type);
+    const callIds = selectedCalls.map((call) => call.id);
+    const messageIds = selectedMessageIds.filter((id) => !callIds.includes(id));
+    const callEntries = selectedCalls.filter((call) => call.serverId);
+    await Promise.all(callEntries.map((call) => axiosInstance.delete(`/auth/calls/${call.serverId}`).catch(() => null)));
+    if (callIds.length) {
+      setCallHistory((current) => current.filter((entry) => !callIds.includes(entry.id)));
+      const localHistory = readCallHistory().filter((entry) => !callIds.includes(entry.id));
+      localStorage.setItem("lark-call-history", JSON.stringify(localHistory));
+      window.dispatchEvent(new Event("lark:call-history"));
+    }
+    const didDelete = messageIds.length ? await deleteMessages(messageIds, type) : true;
     if (didDelete) cancelSelection();
+  };
+
+  const handleDeleteRequest = () => {
+    if (selectedCalls.length && !selectedMessages.length) {
+      handleDeleteSelected("me");
+      return;
+    }
+    setDeleteModalOpen(true);
   };
 
   return (
@@ -255,7 +276,7 @@ export function MessageList() {
                     {formatMessageDate(item.createdAt)}
                   </p>
                 ) : null}
-                {item.timelineType === "call" ? <CallMessage entry={item} /> : <MessageBubble
+                {item.timelineType === "call" ? <CallMessage entry={item} isSelectionMode={isSelectionActive} isSelected={isSelectionActive && selectedMessageIds.includes(item.id)} onToggleSelected={toggleSelectedMessage} onStartSelection={startSelection} /> : <MessageBubble
                     message={item}
                     isHighlighted={(highlightedMessage?.conversationId === activeConversationId && highlightedMessage?.messageId === item.id) || currentSearchMatch?.id === item.id}
                     searchQuery={messageSearchQuery}
@@ -306,10 +327,11 @@ export function MessageList() {
       {activeConversation && isSelectionActive ? (
         <SelectionBar
           selectedCount={selectedMessageIds.length}
-          totalCount={selectableMessages.length}
+          totalCount={selectableTimeline.length}
           onSelectAll={toggleSelectAll}
-          onDelete={() => setDeleteModalOpen(true)}
+          onDelete={handleDeleteRequest}
           onForward={() => setForwardModalOpen(true)}
+          canForward={selectedCalls.length === 0}
           onCancel={cancelSelection}
         />
       ) : null}

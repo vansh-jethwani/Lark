@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
+import Call from "../models/call.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 
 function serializeProfile(user) {
@@ -84,6 +85,7 @@ export async function updateProfile(req, res) {
     res.status(200).json(serializeProfile(updatedUser));
   } catch (error) {
     console.log("Error in updateProfile:", error.message);
+    if (error.code === 11000) return res.status(409).json({ message: "Username is already taken." });
     res.status(500).json({ message: "Internal server error" });
   }
 }
@@ -147,6 +149,7 @@ export async function deleteProfile(req, res) {
     await Message.deleteMany({
       $or: [{ senderId: req.userId }, { receiverId: req.userId }],
     });
+    await Call.deleteMany({ $or: [{ caller: req.userId }, { receiver: req.userId }] });
     await User.findByIdAndDelete(req.userId);
     res.clearCookie("jwt", {
       httpOnly: true,

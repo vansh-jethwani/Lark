@@ -2,7 +2,7 @@ import Call from "../models/call.model.js";
 
 export async function getCallHistory(req, res) {
   try {
-    const calls = await Call.find({ $or: [{ caller: req.userId }, { receiver: req.userId }] })
+    const calls = await Call.find({ $or: [{ caller: req.userId }, { receiver: req.userId }], deletedFor: { $ne: req.userId } })
       .sort({ createdAt: -1 })
       .limit(200)
       .populate("caller", "fullName profilePic")
@@ -16,11 +16,12 @@ export async function getCallHistory(req, res) {
 
 export async function deleteCallHistory(req, res) {
   try {
-    const result = await Call.deleteOne({
+    const result = await Call.updateOne({
       _id: req.params.id,
       $or: [{ caller: req.userId }, { receiver: req.userId }],
-    });
-    if (!result.deletedCount) return res.status(404).json({ message: "Call record not found" });
+      deletedFor: { $ne: req.userId },
+    }, { $addToSet: { deletedFor: req.userId } });
+    if (!result.modifiedCount) return res.status(404).json({ message: "Call record not found" });
     return res.status(204).end();
   } catch (error) {
     console.error("Error deleting call history:", error.message);

@@ -10,7 +10,7 @@ const pendingEmailVerificationSchema = new mongoose.Schema(
       trim: true,
     },
     fullName: { type: String, required: true, trim: true },
-    username: { type: String, required: true, lowercase: true, trim: true },
+    username: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
     otpHash: { type: String, required: true },
     otpExpiresAt: { type: Date, required: true },

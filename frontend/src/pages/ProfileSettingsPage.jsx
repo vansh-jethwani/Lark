@@ -10,7 +10,6 @@ import {
   MailIcon,
   MoonIcon,
   MonitorIcon,
-  PhoneIcon,
   SunIcon,
   Trash2Icon,
   UserIcon,
@@ -632,39 +631,12 @@ export default function ProfileSettingsPage() {
               icon={MailIcon}
               label="Email"
               value={profile?.email || "Not available"}
-              onClick={() =>
-                setDetailModal({
-                  title: "Email",
-                  label: "Email address",
-                  value: profile?.email || "Not available",
-                })
-              }
-            />
-
-            <SettingRow
-              icon={PhoneIcon}
-              label="Phone"
-              value={profile?.phoneNumber || "Not available"}
-              onClick={() =>
-                setDetailModal({
-                  title: "Phone",
-                  label: "Phone number",
-                  value: profile?.phoneNumber || "Not available",
-                })
-              }
             />
 
             <SettingRow
               icon={CalendarIcon}
-              label="Joined"
+              label="Date Joined"
               value={formatJoinDate(profile?.createdAt)}
-              onClick={() =>
-                setDetailModal({
-                  title: "Joined",
-                  label: "Account created",
-                  value: formatJoinDate(profile?.createdAt),
-                })
-              }
             />
 
             <SettingRow

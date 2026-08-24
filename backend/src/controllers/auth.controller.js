@@ -255,7 +255,7 @@ export async function resendEmailOtp(req, res) {
 
 export async function login(req, res) {
     try {
-        const identifier = String(req.body.identifier || req.body.email || "").trim().toLowerCase();
+        const identifier = String(req.body.identifier || req.body.email || "").trim().toLowerCase().replace(/^@+/, "");
         const password = String(req.body.password || "");
 
         if (!identifier || !password) {

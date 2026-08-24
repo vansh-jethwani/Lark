@@ -7,6 +7,7 @@ export function SelectionBar({
   onDelete,
   onForward,
   onCancel,
+  canForward = true,
 }) {
   const allSelected = selectedCount > 0 && selectedCount === totalCount;
 
@@ -48,7 +49,7 @@ export function SelectionBar({
         <button
           type="button"
           onClick={onForward}
-          disabled={selectedCount === 0}
+          disabled={selectedCount === 0 || !canForward}
           className="inline-flex items-center gap-2 rounded-full bg-accent px-3 py-2 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-45"
         >
           <ForwardIcon className="size-4" aria-hidden />
