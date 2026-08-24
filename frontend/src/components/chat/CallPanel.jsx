@@ -1,6 +1,6 @@
-import { Avatar, Button } from "@heroui/react";
-import { Maximize2Icon, MicIcon, MicOffIcon, PhoneIcon, PhoneOffIcon, VideoIcon, VideoOffIcon, Volume2Icon, VolumeXIcon, XIcon, MinusIcon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+﻿import { Avatar, Button } from "@heroui/react";
+import { Maximize2Icon, MicIcon, MicOffIcon, PhoneIcon, PhoneIncomingIcon, PhoneOutgoingIcon, PhoneOffIcon, Trash2Icon, VideoIcon, VideoOffIcon, Volume2Icon, VolumeXIcon, XIcon, MinusIcon, RefreshCwIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppLogo } from "../AppLogo";
 import { getInitials } from "../../hooks/useSelectedConversation";
 import { useAuthStore } from "../../store/useAuthStore";
@@ -13,16 +13,128 @@ const constraints = (type, facingMode = "user") => ({
 });
 const debug = (...args) => { if (import.meta.env.DEV) console.debug("[WEBRTC]", ...args); };
 
-import { addCallHistory, dateLabel, formatCallDuration, localDateKey, normalizeCallRecord, readCallHistory, timeLabel } from "../../lib/callHistory";
+import { addCallHistory, callStatusLabel, dateLabel, formatCallDuration, groupCallHistory, normalizeCallRecord, readCallHistory, timeLabel } from "../../lib/callHistory";
 import { axiosInstance } from "../../lib/axios";
 export function CallHistory() {
   const users = useChatStore((state) => state.users);
+  const searchQuery = useChatStore((state) => state.searchQuery);
   const authUser = useAuthStore((state) => state.authUser);
   const [history, setHistory] = useState(() => readCallHistory());
+  const [expandedKey, setExpandedKey] = useState(null);
   useEffect(() => { const refresh = () => setHistory(readCallHistory()); window.addEventListener("lark:call-history", refresh); return () => window.removeEventListener("lark:call-history", refresh); }, []);
   useEffect(() => { axiosInstance.get("/auth/calls").then((response) => setHistory(response.data.map((record) => normalizeCallRecord(record, authUser?._id)))).catch(() => {}); }, [authUser?._id]);
-  const groups = history.reduce((map, entry) => { const key = `${entry.peerId}:${localDateKey(entry.createdAt)}`; map.set(key, [...(map.get(key) || []), entry]); return map; }, new Map());
-  return <div className="space-y-3 p-2">{groups.size === 0 ? <p className="px-3 py-8 text-center text-sm text-muted">No call history yet.</p> : [...groups.values()].map((entries) => { const sorted = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); const first = sorted[sorted.length - 1]; const user = users.find((item) => String(item._id) === String(first.peerId)); return <div key={`${first.peerId}:${localDateKey(first.createdAt)}`} className="rounded-xl border border-border bg-surface/40 p-3"><div className="flex items-center gap-3"><Avatar className="size-10"><Avatar.Image alt={first.peerName} src={user?.profilePic || first.peerAvatar} /><Avatar.Fallback>{getInitials(first.peerName)}</Avatar.Fallback></Avatar><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{first.peerName}</p><p className="text-xs text-muted">{entries.length === 1 ? "Call" : `Calls (${entries.length})`} · {dateLabel(first.createdAt)}</p></div></div><div className="mt-2 space-y-1">{sorted.map((entry) => <div key={entry.id} className="flex items-center gap-2 text-xs text-muted"><span>{entry.direction === "incoming" ? "↙ Incoming" : "↗ Outgoing"} {entry.type === "video" ? "video" : "audio"}</span><span className="flex-1">· {entry.status === "missed" ? "Missed" : entry.status === "rejected" ? "Rejected" : entry.status === "cancelled" ? "Cancelled" : entry.status === "failed" ? "Failed" : entry.status === "accepted" ? "Accepted" : "Completed"}{entry.duration ? ` · ${formatCallDuration(entry.duration)}` : ""}</span><span>{timeLabel(entry.createdAt)}</span></div>)}</div></div>; })}</div>;
+  const groups = useMemo(() => {
+    const grouped = groupCallHistory(history);
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return grouped;
+    const matchingUserIds = new Set(users
+      .filter((user) => user.username?.toLowerCase().includes(query))
+      .map((user) => String(user._id)));
+    return grouped.filter((group) => matchingUserIds.has(String(group.peerId)));
+  }, [history, searchQuery, users]);
+  const matchingUsers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return users.filter((user) => !user.isAI && user.username?.toLowerCase().includes(query));
+  }, [searchQuery, users]);
+  return <div className="mx-auto w-full max-w-2xl space-y-1 p-2 sm:p-3">
+    {matchingUsers.length > 0 ? <div className="mb-2 border-b border-border pb-2"><p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">People</p>{matchingUsers.map((user) => <CallUserSearchRow key={user._id} user={user} />)}</div> : null}
+    {groups.length === 0 ? <p className="px-3 py-8 text-center text-sm text-muted">{searchQuery.trim() ? (matchingUsers.length > 0 ? "No call history for these users." : "No users match your search.") : "No calls yet"}</p> : groups.map((group) => {
+    const latest = group.latest;
+    const user = users.find((item) => String(item._id) === String(group.peerId));
+    const expanded = expandedKey === group.key;
+    return <div key={group.key} className="overflow-hidden border-b border-border/70 last:border-b-0">
+      <button type="button" className="flex w-full items-center gap-3 px-2 py-3 text-left transition-colors hover:bg-surface/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:px-3" onClick={() => setExpandedKey(expanded ? null : group.key)} aria-expanded={expanded}>
+        <Avatar className="size-11 shrink-0"><Avatar.Image alt={latest.peerName} src={user?.profilePic || latest.peerAvatar} /><Avatar.Fallback>{getInitials(latest.peerName)}</Avatar.Fallback></Avatar>
+        <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-semibold text-foreground">{latest.peerName}{group.entries.length > 1 ? ` (${group.entries.length})` : ""}</span><span className={`mt-0.5 flex items-center gap-1.5 truncate text-xs ${isUnsuccessful(latest) ? "text-danger" : "text-muted"}`}><CallDirectionIcon entry={latest} />{dateTimeLabel(latest.createdAt)}</span></span>
+        <CallActionButton entry={latest} />
+      </button>
+      {expanded ? <div className="space-y-3 border-t border-border/50 bg-surface/30 px-14 py-3 sm:px-16">{group.entries.map((entry) => <CallHistoryDetail key={entry.id} entry={entry} />)}</div> : null}
+    </div>;
+  })}</div>;
+}
+
+function CallActionButton({ entry }) {
+  const Icon = entry.type === "video" ? VideoIcon : PhoneIcon;
+  const startCall = (event) => {
+    event.stopPropagation();
+    window.dispatchEvent(new CustomEvent("lark:start-call", {
+      detail: { type: entry.type, user: { _id: entry.peerId, fullName: entry.peerName, profilePic: entry.peerAvatar } },
+    }));
+  };
+  return <span role="button" tabIndex={0} aria-label={`${entry.type === "video" ? "Video" : "Audio"} call ${entry.peerName}`} title={`${entry.type === "video" ? "Video" : "Audio"} call`} onClick={startCall} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") startCall(event); }} className="grid size-9 shrink-0 place-items-center rounded-full text-success transition-colors hover:bg-success/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><Icon className="size-5" /></span>;
+}
+
+function CallUserSearchRow({ user }) {
+  const startCall = (type) => window.dispatchEvent(new CustomEvent("lark:start-call", {
+    detail: { type, user: { _id: user._id, fullName: user.fullName, profilePic: user.profilePic, isOnline: user.isOnline } },
+  }));
+  return <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-surface/60">
+    <Avatar className="size-10 shrink-0"><Avatar.Image alt={user.fullName} src={user.profilePic} /><Avatar.Fallback>{getInitials(user.fullName)}</Avatar.Fallback></Avatar>
+    <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{user.fullName}</p><p className="truncate text-xs text-muted">@{user.username}</p></div>
+    <div className="flex shrink-0 gap-1"><Button isIconOnly size="sm" variant="ghost" aria-label={`Audio call ${user.fullName}`} onPress={() => startCall("audio")}><PhoneIcon className="size-4" /></Button><Button isIconOnly size="sm" variant="ghost" aria-label={`Video call ${user.fullName}`} onPress={() => startCall("video")}><VideoIcon className="size-4" /></Button></div>
+  </div>;
+}
+
+function CallDirectionIcon({ entry }) {
+  const Icon = entry.direction === "incoming" ? PhoneIncomingIcon : PhoneOutgoingIcon;
+  return <Icon className="size-3.5 shrink-0" />;
+}
+
+function isUnsuccessful(entry) {
+  return ["missed", "rejected", "cancelled", "failed"].includes(entry.status);
+}
+
+function CallTypeIcon({ entry }) {
+  const Icon = entry.type === "video" ? VideoIcon : PhoneIcon;
+  return <Icon className="size-3.5 shrink-0" />;
+}
+
+function callDescription(entry) {
+  return `${entry.direction === "incoming" ? "Incoming" : "Outgoing"} ${entry.type === "video" ? "video" : "audio"} call`;
+}
+
+function dateTimeLabel(value) {
+  const label = dateLabel(value);
+  const date = new Date(value);
+  const displayDate = label === "Today" || label === "Yesterday"
+    ? label
+    : date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+  return `${displayDate}, ${timeLabel(value).replace(/\s+/g, " ").toLowerCase()}`;
+}
+
+export function CallMessage({ entry }) {
+  return <CallHistoryDetail entry={entry} inChat />;
+}
+
+function CallHistoryDetail({ entry, inChat = false }) {
+  const status = callStatusLabel(entry.status);
+  const unsuccessful = isUnsuccessful(entry);
+  const [selected, setSelected] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const holdTimer = useRef(null);
+  const remove = async () => {
+    try {
+      if (entry.id && !String(entry.id).startsWith("local-")) {
+        try { await axiosInstance.delete(`/auth/calls/${entry.id}`); } catch { /* Cached records may not exist on the server. */ }
+      }
+      const history = readCallHistory().filter((item) => item.id !== entry.id);
+      localStorage.setItem("lark-call-history", JSON.stringify(history));
+      window.dispatchEvent(new Event("lark:call-history"));
+    } catch {
+      return;
+    }
+  };
+  const selectFromHold = () => { setSelected(true); setMenuOpen(false); };
+  const startHold = () => { holdTimer.current = window.setTimeout(selectFromHold, 500); };
+  const clearHold = () => { if (holdTimer.current) window.clearTimeout(holdTimer.current); };
+  const showMenu = (event) => { event.preventDefault(); setMenuPosition({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 140) }); setMenuOpen(true); };
+  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex max-w-[min(90%,28rem)] items-start gap-2 rounded-2xl px-3 py-2 text-xs shadow-sm ${inChat && entry.direction === "outgoing" ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "bg-danger/10" : "rounded-bl-md bg-surface"}`}><span className={unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}><CallDirectionIcon entry={entry} /></span><CallTypeIcon entry={entry} /><span className="min-w-0 flex-1"><span className={inChat && entry.direction === "outgoing" ? "text-accent-foreground" : "text-foreground"}>{callDescription(entry)}</span><span className={`block ${unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}`}>{status}{status === "Completed" && entry.duration ? ` · ${formatCallDuration(entry.duration)}` : ""} · {timeLabel(entry.createdAt)}</span></span>{selected ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
+}
+
+function CallLogContextMenu({ position, onClose, onSelect, onDelete }) {
+  return <><button type="button" aria-label="Close call menu" className="fixed inset-0 z-40 cursor-default" onClick={onClose} /><div className="fixed z-50 w-44 rounded-xl border border-border bg-background p-1.5 shadow-2xl" style={{ top: position.y, left: position.x }}><button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-surface" onClick={onSelect}>Select</button><button type="button" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-danger hover:bg-danger/10" onClick={onDelete}><Trash2Icon className="size-4" />Delete</button></div></>;
 }
 
 export function ConversationCallHistory({ peerId }) {
@@ -30,7 +142,7 @@ export function ConversationCallHistory({ peerId }) {
   const [history, setHistory] = useState(() => readCallHistory());
   useEffect(() => { const refresh = () => setHistory(readCallHistory()); window.addEventListener("lark:call-history", refresh); return () => window.removeEventListener("lark:call-history", refresh); }, []);
   useEffect(() => { axiosInstance.get("/auth/calls").then((response) => setHistory(response.data.map((record) => normalizeCallRecord(record, authUser?._id)))).catch(() => {}); }, [authUser?._id]);
-  return <>{history.filter((entry) => String(entry.peerId) === String(peerId)).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map((entry) => <div key={entry.id} className="my-2 flex justify-center"><div className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-muted">{entry.direction === "incoming" ? "↙ Incoming" : "↗ Outgoing"} {entry.type === "video" ? "video" : "audio"} call · {entry.status === "missed" ? "Missed" : entry.status === "rejected" ? "Rejected" : entry.status === "cancelled" ? "Cancelled" : entry.status === "completed" ? formatCallDuration(entry.duration) : entry.status} · {timeLabel(entry.createdAt)}</div></div>)}</>;
+  return <>{history.filter((entry) => String(entry.peerId) === String(peerId)).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map((entry) => <CallHistoryDetail key={entry.id} entry={entry} inChat />)}</>;
 }
 
 export function CallPanel() {
@@ -56,6 +168,18 @@ export function CallPanel() {
   const remoteAudioRef = useRef(null);
   const ringAudioRef = useRef(null);
   const callWindowRef = useRef(null);
+
+  useEffect(() => {
+    if (!callWindowRef.current || !call) return undefined;
+    const mediaQuery = window.matchMedia("(min-width: 640px)");
+    const applyWindowSize = () => {
+      callWindowRef.current.style.height = mediaQuery.matches && !maximized ? "auto" : "100dvh";
+      callWindowRef.current.style.maxHeight = mediaQuery.matches && !maximized ? "calc(100dvh - 2rem)" : "100dvh";
+    };
+    applyWindowSize();
+    mediaQuery.addEventListener("change", applyWindowSize);
+    return () => mediaQuery.removeEventListener("change", applyWindowSize);
+  }, [call, maximized]);
 
   const setCurrentCall = (value) => { callRef.current = value; setCall(value); };
   const showMediaError = (error) => setStatusText(error.name === "NotAllowedError" ? "Camera or microphone permission was denied." : error.name === "NotFoundError" ? "No camera or microphone was found." : "Camera or microphone is unavailable.");
@@ -108,8 +232,34 @@ export function CallPanel() {
   const end = (status = "completed") => { if (callRef.current) socket?.emit("call:end", { receiverId: callRef.current.peer.id, callId: callRef.current.id }); finish(status); };
   const toggleMute = () => { const next = !muted; localStreamRef.current?.getAudioTracks().forEach((track) => { track.enabled = !next; }); setMuted(next); };
   const toggleCamera = () => { const next = !cameraOff; localStreamRef.current?.getVideoTracks().forEach((track) => { track.enabled = !next; }); setCameraOff(next); };
-  const switchCamera = async () => { if (call?.type !== "video") return; const nextFacingMode = facingMode === "user" ? "environment" : "user"; let stream; try { stream = await navigator.mediaDevices.getUserMedia(constraints("video", nextFacingMode)); const newTrack = stream.getVideoTracks()[0]; const sender = peerRef.current?.getSenders().find((item) => item.track?.kind === "video"); if (!sender) throw new Error("No video sender"); await sender.replaceTrack(newTrack); localStreamRef.current?.getVideoTracks().forEach((track) => track.stop()); localStreamRef.current = stream; setFacingMode(nextFacingMode); if (localVideoRef.current) localVideoRef.current.srcObject = stream; } catch { stream?.getTracks().forEach((track) => track.stop()); setStatusText("Rear camera is not available on this device."); } };
+  const switchCamera = async () => {
+    if (call?.type !== "video") return;
+    const nextFacingMode = facingMode === "user" ? "environment" : "user";
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: nextFacingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      const newTrack = stream.getVideoTracks()[0];
+      const sender = peerRef.current?.getSenders().find((item) => item.track?.kind === "video");
+      if (!newTrack || !sender) throw new Error("Video track is unavailable");
+      await sender.replaceTrack(newTrack);
+      const oldTrack = localStreamRef.current?.getVideoTracks()[0];
+      const nextStream = new MediaStream([...(localStreamRef.current?.getAudioTracks() || []), newTrack]);
+      oldTrack?.stop();
+      localStreamRef.current = nextStream;
+      setFacingMode(nextFacingMode);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = nextStream;
+        await localVideoRef.current.play().catch(() => {});
+      }
+    } catch {
+      stream?.getTracks().forEach((track) => track.stop());
+      setStatusText("The other camera is not available on this device.");
+    }
+  };
   const toggleFullscreen = () => { if (minimized) setMinimized(false); setMaximized((value) => !value); };
-  const view = call ? <div className={`fixed z-50 ${minimized ? "bottom-4 right-4 w-[min(22rem,calc(100vw-2rem))]" : maximized ? "inset-0 grid place-items-center bg-black p-0" : "inset-0 grid place-items-center bg-black/70 p-4"}`}><div ref={callWindowRef} className={`w-full overflow-hidden border-border bg-zinc-950 text-white shadow-2xl ${minimized ? "max-w-sm rounded-2xl border" : maximized ? "h-full rounded-none" : "max-w-4xl rounded-2xl border"}`}><div className="flex items-center justify-between border-b border-white/10 px-4 py-3"><div className="flex items-center gap-2"><AppLogo size={30} className="rounded-lg" alt="Lark" /><div><p className="text-sm font-semibold">{call.peer.name}</p><p className="text-xs text-zinc-400">{call.status === "calling" ? "Calling..." : call.status === "ringing" ? "Ringing..." : call.status === "reconnecting" ? "Reconnecting..." : call.status === "connecting" ? "Connecting..." : `${call.type === "video" ? "Video" : "Voice"} call · ${formatCallDuration(seconds)}`}</p></div></div><div className="flex gap-1"><Button isIconOnly variant="ghost" aria-label="Minimize or restore call" onPress={() => { setMinimized((value) => !value); setMaximized(false); }}><MinusIcon className="size-4 text-white" /></Button><Button isIconOnly variant="ghost" aria-label="End call" onPress={() => end("cancelled")}><XIcon className="size-4 text-white" /></Button></div></div>{!minimized ? <><div className={`relative bg-black ${maximized ? "h-[calc(100vh-8rem)]" : "aspect-video"}`}>{call.type === "video" ? <video ref={remoteVideoRef} autoPlay playsInline className="size-full object-contain" /> : <div className="grid size-full place-items-center"><Avatar className="size-24"><Avatar.Image alt={call.peer.name} src={call.peer.avatar} /><Avatar.Fallback className="text-2xl">{call.peer.initials}</Avatar.Fallback></Avatar></div>}<video ref={localVideoRef} autoPlay muted playsInline className={`absolute bottom-3 right-3 h-24 w-32 rounded-lg bg-zinc-800 object-cover ${call.type === "video" ? "" : "hidden"}`} /><audio ref={remoteAudioRef} autoPlay /></div><div className="flex flex-wrap items-center justify-center gap-3 px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">{call.incoming && call.status === "ringing" ? <><Button className="bg-emerald-600 text-white" onPress={accept}><PhoneIcon /> Accept</Button><Button variant="danger" onPress={() => end("missed")}><PhoneOffIcon /> Reject</Button></> : <><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Mute microphone" onPress={toggleMute}>{muted ? <MicOffIcon /> : <MicIcon />}</Button>{call.type === "video" ? <><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Toggle camera" onPress={toggleCamera}>{cameraOff ? <VideoOffIcon /> : <VideoIcon />}</Button><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Switch camera" onPress={switchCamera}><RefreshCwIcon /></Button></> : null}<Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Toggle speaker" onPress={async () => { if (remoteAudioRef.current?.setSinkId) await remoteAudioRef.current.setSinkId(speakerOn ? "communications" : "default"); setSpeakerOn((value) => !value); }}>{speakerOn ? <Volume2Icon /> : <VolumeXIcon />}</Button><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label={maximized ? "Restore call" : "Maximize call"} onPress={toggleFullscreen}><Maximize2Icon /></Button><Button isIconOnly variant="danger" className="size-11 rounded-full" aria-label="End call" onPress={() => end()}><PhoneOffIcon /></Button></>}</div></> : <div className="flex items-center justify-between px-4 py-2 text-xs text-zinc-400"><span>{call.type === "video" ? "Video" : "Voice"} call</span><span>{formatCallDuration(seconds)}</span></div>}</div></div> : null;
+    const view = call ? <div className={`fixed z-50 ${minimized ? "bottom-4 right-4 w-[min(22rem,calc(100vw-2rem))]" : maximized ? "inset-0 grid place-items-center bg-black p-0" : "inset-0 bg-black sm:grid sm:place-items-center sm:bg-black/70 sm:p-4"}`}><div ref={callWindowRef} className={`flex w-full flex-col overflow-hidden border-border bg-zinc-950 text-white shadow-2xl ${minimized ? "max-w-sm rounded-2xl border" : maximized ? "h-dvh rounded-none" : "h-dvh rounded-none sm:max-h-[calc(100dvh-2rem)] sm:max-w-4xl sm:rounded-2xl sm:border"}`}><div className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-3 sm:px-4"><div className="flex min-w-0 items-center gap-2"><AppLogo size={30} className="rounded-lg" alt="Lark" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{call.peer.name}</p><p className="text-xs text-zinc-400">{call.status === "calling" ? "Calling..." : call.status === "ringing" ? "Ringing..." : call.status === "reconnecting" ? "Reconnecting..." : call.status === "connecting" ? "Connecting..." : `${call.type === "video" ? "Video" : "Voice"} call Â· ${formatCallDuration(seconds)}`}</p></div></div><div className="flex gap-1"><Button isIconOnly variant="ghost" aria-label="Minimize or restore call" onPress={() => { setMinimized((value) => !value); setMaximized(false); }}><MinusIcon className="size-4 text-white" /></Button><Button isIconOnly variant="ghost" aria-label="End call" onPress={() => end("cancelled")}><XIcon className="size-4 text-white" /></Button></div></div>{!minimized ? <><div className={`relative min-h-0 flex-1 bg-black sm:flex-none ${maximized ? "sm:h-[calc(100dvh-8rem)]" : "sm:aspect-video"}`}>{call.type === "video" ? <video ref={remoteVideoRef} autoPlay playsInline className="size-full object-contain" /> : <div className="grid size-full place-items-center"><Avatar className="size-24"><Avatar.Image alt={call.peer.name} src={call.peer.avatar} /><Avatar.Fallback className="text-2xl">{call.peer.initials}</Avatar.Fallback></Avatar></div>}<video ref={localVideoRef} autoPlay muted playsInline className={`absolute bottom-3 right-3 h-24 w-32 rounded-lg bg-zinc-800 object-cover sm:bottom-4 sm:right-4 ${call.type === "video" ? "" : "hidden"}`} /><audio ref={remoteAudioRef} autoPlay /></div><div className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:gap-3 sm:px-4 sm:py-4">{call.incoming && call.status === "ringing" ? <><Button className="bg-emerald-600 text-white" onPress={accept}><PhoneIcon /> Accept</Button><Button variant="danger" onPress={() => end("missed")}><PhoneOffIcon /> Reject</Button></> : <><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Mute microphone" onPress={toggleMute}>{muted ? <MicOffIcon /> : <MicIcon />}</Button>{call.type === "video" ? <><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Toggle camera" onPress={toggleCamera}>{cameraOff ? <VideoOffIcon /> : <VideoIcon />}</Button><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Switch camera" onPress={switchCamera}><RefreshCwIcon /></Button></> : null}<Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label="Toggle speaker" onPress={async () => { if (remoteAudioRef.current?.setSinkId) await remoteAudioRef.current.setSinkId(speakerOn ? "communications" : "default"); setSpeakerOn((value) => !value); }}>{speakerOn ? <Volume2Icon /> : <VolumeXIcon />}</Button><Button isIconOnly className="size-11 rounded-full bg-zinc-700 text-white" aria-label={maximized ? "Restore call" : "Maximize call"} onPress={toggleFullscreen}><Maximize2Icon /></Button><Button isIconOnly variant="danger" className="size-11 rounded-full" aria-label="End call" onPress={() => end()}><PhoneOffIcon /></Button></>}</div></> : <div className="flex items-center justify-between px-4 py-2 text-xs text-zinc-400"><span>{call.type === "video" ? "Video" : "Voice"} call</span><span>{formatCallDuration(seconds)}</span></div>}</div></div> : null;
   return <>{statusText ? <div className="fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-lg bg-danger px-4 py-3 text-sm text-danger-foreground shadow-lg">{statusText}<button type="button" aria-label="Dismiss call message" onClick={() => setStatusText("")}><XIcon className="size-4" /></button></div> : null}<audio ref={ringAudioRef} src="/ring.mp3" loop preload="auto" aria-hidden="true" />{view}</>;
 }

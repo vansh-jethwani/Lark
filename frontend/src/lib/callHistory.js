@@ -26,6 +26,10 @@ export function normalizeCallRecord(record, currentUserId) {
   const callerId = record.caller?._id || record.caller;
   const outgoing = String(currentUserId) === String(callerId);
   const peer = outgoing ? record.receiver : record.caller;
+  const startedAt = record.startedAt || record.createdAt;
+  const duration = Number(record.duration) || (record.answeredAt && record.endedAt
+    ? Math.max(0, Math.floor((new Date(record.endedAt) - new Date(record.answeredAt)) / 1000))
+    : 0);
   return {
     id: record._id || record.id,
     callId: record.callId,
@@ -34,10 +38,39 @@ export function normalizeCallRecord(record, currentUserId) {
     peerAvatar: peer?.profilePic || record.peerAvatar || "",
     type: record.type,
     direction: outgoing ? "outgoing" : "incoming",
-    status: record.status,
-    duration: record.duration || 0,
-    createdAt: record.createdAt || record.startedAt,
+    status: record.status || "unknown",
+    duration,
+    createdAt: startedAt,
   };
+}
+
+export function groupCallHistory(history) {
+  const groups = new Map();
+  for (const entry of history) {
+    if (!entry?.peerId || !entry.createdAt) continue;
+    const key = `${entry.peerId}:${localDateKey(entry.createdAt)}`;
+    const group = groups.get(key) || { key, peerId: entry.peerId, entries: [] };
+    group.entries.push(entry);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => {
+      const entries = [...group.entries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      return { ...group, entries, latest: entries[0] };
+    })
+    .sort((a, b) => new Date(b.latest.createdAt) - new Date(a.latest.createdAt));
+}
+
+export function callStatusLabel(status) {
+  return {
+    completed: "Completed",
+    accepted: "Completed",
+    rejected: "Rejected",
+    missed: "Missed",
+    cancelled: "Cancelled",
+    failed: "Failed",
+    ringing: "Unknown",
+  }[status] || "Unknown";
 }
 
 export function localDateKey(value) {

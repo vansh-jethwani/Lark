@@ -27,6 +27,7 @@ function mapUserForList(user, onlineUsers) {
     id: user._id,
     name: user.fullName,
     email: user.email,
+    username: user.username,
     avatarUrl: user.profilePic,
     initials: getInitials(user.fullName),
     isOnline: onlineUsers.includes(user._id),
@@ -42,8 +43,9 @@ function mapUserForList(user, onlineUsers) {
   };
 }
 
-function ChatSidebar() {
+function ChatSidebar({ width }) {
   const conversations = useChatStore((state) => state.conversations);
+  const users = useChatStore((state) => state.users);
 
   const searchQuery = useChatStore((state) => state.searchQuery);
   const setSearchQuery = useChatStore((state) => state.setSearchQuery);
@@ -76,14 +78,15 @@ function ChatSidebar() {
     ),
   ].map((user) => mapUserForList(user, onlineUsers));
   const filteredConversations = normalizedSearchQuery
-    ? conversationUsers.filter((conversation) =>
-      conversation.peer.name.toLowerCase().includes(normalizedSearchQuery),
-    )
+    ? users
+      .filter((user) => !user.isAI && user.username?.toLowerCase().includes(normalizedSearchQuery))
+      .map((user) => mapUserForList(user, onlineUsers))
     : conversationUsers;
 
   return (
     <aside
-      className={`w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-72 ${!isLargeScreen && activeConversationId ? "hidden lg:flex" : "flex"
+      style={isLargeScreen && width ? { width } : undefined}
+      className={`w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-auto ${!isLargeScreen && activeConversationId ? "hidden lg:flex" : "flex"
         }`}
     >
       <div className="shrink-0 border-b border-border px-2 pb-2 pt-2.5 sm:px-3 sm:pt-3">
@@ -135,7 +138,7 @@ function ChatSidebar() {
           >
             <SearchField.Group className="rounded-xl">
               <SearchField.SearchIcon />
-              <SearchField.Input aria-label="Search" placeholder="Search" />
+              <SearchField.Input aria-label="Search users by username" placeholder="Search Username" />
               {searchQuery ? <SearchField.ClearButton /> : null}
             </SearchField.Group>
           </SearchField>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 
 import useScrollToBottom from "../../hooks/useScrollToBottom";
@@ -14,10 +14,15 @@ import { DeleteMessageModal } from "./DeleteMessageModal";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SelectionBar } from "./SelectionBar";
 import { formatMessageDate, getMessageDateKey } from "../../lib/utils";
-import { ConversationCallHistory } from "./CallPanel";
+import { CallMessage } from "./CallPanel";
+import { normalizeCallRecord, readCallHistory } from "../../lib/callHistory";
+import { axiosInstance } from "../../lib/axios";
+import { useAuthStore } from "../../store/useAuthStore";
 
 export function MessageList() {
   const { activeConversation, activeConversationId } = useSelectedConversation();
+  const authUser = useAuthStore((state) => state.authUser);
+  const [callHistory, setCallHistory] = useState(() => readCallHistory());
   const [highlightedMessage, setHighlightedMessage] = useState(null);
   const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);
   const [hiddenPinnedBannerConversationIds, setHiddenPinnedBannerConversationIds] = useState([]);
@@ -60,6 +65,28 @@ export function MessageList() {
     : [];
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const currentSearchMatch = searchMatches[currentSearchIndex];
+  const timeline = useMemo(() => {
+    if (!activeConversation) return [];
+    const calls = callHistory
+      .filter((entry) => String(entry.peerId) === String(activeConversationId))
+      .map((entry) => ({ ...entry, timelineType: "call" }));
+    return [...activeConversation.messages.map((message) => ({ ...message, timelineType: "message" })), ...calls]
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  }, [activeConversation, activeConversationId, callHistory]);
+
+  useEffect(() => {
+    const refresh = () => setCallHistory(readCallHistory());
+    window.addEventListener("lark:call-history", refresh);
+    return () => window.removeEventListener("lark:call-history", refresh);
+  }, []);
+
+  useEffect(() => {
+    if (!authUser?._id) return undefined;
+    axiosInstance.get("/auth/calls")
+      .then((response) => setCallHistory(response.data.map((record) => normalizeCallRecord(record, authUser._id))))
+      .catch(() => {});
+    return undefined;
+  }, [authUser?._id]);
 
   useEffect(() => {
     clearTimeout(highlightTimeoutRef.current);
@@ -213,41 +240,34 @@ export function MessageList() {
             </div>
           ) : null}
 
-          {activeConversation.messages.map((message, index) => {
-            const currentDateKey = getMessageDateKey(message.createdAt);
+          {timeline.map((item, index) => {
+            const currentDateKey = getMessageDateKey(item.createdAt);
             const previousDateKey =
               index > 0
-                ? getMessageDateKey(activeConversation.messages[index - 1].createdAt)
+                ? getMessageDateKey(timeline[index - 1].createdAt)
                 : null;
             const shouldShowDate = currentDateKey !== previousDateKey;
 
             return (
-              <div key={message.id} className="contents">
+              <div key={`${item.timelineType}-${item.id}`} className="contents">
                 {shouldShowDate ? (
                   <p className="mb-3 mt-2 text-center text-[11px] font-medium uppercase tracking-wide text-muted first:mt-0">
-                    {formatMessageDate(message.createdAt)}
+                    {formatMessageDate(item.createdAt)}
                   </p>
                 ) : null}
-
-                <MessageBubble
-                  message={message}
-                  isHighlighted={
-                    (highlightedMessage?.conversationId === activeConversationId &&
-                      highlightedMessage?.messageId === message.id) ||
-                    currentSearchMatch?.id === message.id
-                  }
-                  searchQuery={messageSearchQuery}
-                  isSelectionMode={isSelectionActive}
-                  isSelected={isSelectionActive && selectedMessageIds.includes(message.id)}
-                  onJumpToMessage={handleJumpToMessage}
-                  onToggleSelected={toggleSelectedMessage}
-                  onStartSelection={startSelection}
-                />
+                {item.timelineType === "call" ? <CallMessage entry={item} /> : <MessageBubble
+                    message={item}
+                    isHighlighted={(highlightedMessage?.conversationId === activeConversationId && highlightedMessage?.messageId === item.id) || currentSearchMatch?.id === item.id}
+                    searchQuery={messageSearchQuery}
+                    isSelectionMode={isSelectionActive}
+                    isSelected={isSelectionActive && selectedMessageIds.includes(item.id)}
+                    onJumpToMessage={handleJumpToMessage}
+                    onToggleSelected={toggleSelectedMessage}
+                    onStartSelection={startSelection}
+                  />}
               </div>
             );
           })}
-
-          {activeConversationId !== AI_USER_ID ? <ConversationCallHistory peerId={activeConversationId} /> : null}
 
           {activeConversationId === AI_USER_ID && isAIThinking ? (
             <TypingIndicator label="Lark AI is thinking" />

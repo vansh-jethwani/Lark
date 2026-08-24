@@ -35,7 +35,7 @@ export function ConversationRow({ user, selected, onSelect }) {
               unreadCount > 0 ? "font-semibold text-foreground" : "text-muted"
             }`}
           >
-            {user.lastMessagePreview || user.email || ""}
+            {user.lastMessagePreview || (user.username ? `@${user.username}` : user.email) || ""}
           </p>
           {unreadCount > 0 ? (
             <span className="grid min-w-5 shrink-0 place-items-center rounded-full bg-success px-1.5 text-[11px] font-bold leading-5 text-success-foreground">

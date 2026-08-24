@@ -6,6 +6,7 @@ import { AvatarWithOnlineIndicator } from "./AvatarWithOnlineIndicator";
 
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
+import { AI_USER_ID } from "../../data/aiUser";
 
 export function ChatHeader() {
   const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
@@ -14,6 +15,7 @@ export function ChatHeader() {
   const [searchOpen, setSearchOpen] = useState(false);
 
   const { activeConversation, isLargeScreen } = useSelectedConversation();
+  const canCall = activeConversation && activeConversation.id !== AI_USER_ID;
   const startCall = (type) => window.dispatchEvent(new CustomEvent("lark:start-call", {
     detail: { type, user: { _id: activeConversation.id, fullName: activeConversation.peer.name, profilePic: activeConversation.peer.avatarUrl, isOnline: activeConversation.peer.isOnline } },
   }));
@@ -94,8 +96,8 @@ export function ChatHeader() {
             </div>
           ) : (
             <>
-              <Button variant="ghost" size="sm" isIconOnly aria-label="Start audio call" onPress={() => startCall("audio")}><PhoneIcon className="size-5" /></Button>
-              <Button variant="ghost" size="sm" isIconOnly aria-label="Start video call" onPress={() => startCall("video")}><VideoIcon className="size-5" /></Button>
+              {canCall ? <Button variant="ghost" size="sm" isIconOnly aria-label="Start audio call" onPress={() => startCall("audio")}><PhoneIcon className="size-5" /></Button> : null}
+              {canCall ? <Button variant="ghost" size="sm" isIconOnly aria-label="Start video call" onPress={() => startCall("video")}><VideoIcon className="size-5" /></Button> : null}
               <Button variant="ghost" size="sm" isIconOnly className="shrink-0" aria-label="Search messages" onPress={() => setSearchOpen(true)}><SearchIcon className="size-5" strokeWidth={2} aria-hidden /></Button>
             </>
           )
