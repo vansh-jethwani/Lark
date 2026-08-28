@@ -1,29 +1,87 @@
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
+import Group from "../models/group.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { sendMessageNotification } from "../lib/notifications.js";
 
 const MESSAGE_POPULATE = "text image video audio file fileName senderId";
+const DEFAULT_MESSAGE_PAGE_SIZE = 40;
 
-function isMessageParticipant(message, userId) {
+function getPageOptions(req) {
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || DEFAULT_MESSAGE_PAGE_SIZE, 1), 100);
+    if (!req.query.before) return { limit, before: null };
+    try {
+        const cursor = JSON.parse(Buffer.from(req.query.before, "base64url").toString("utf8"));
+        if (!cursor.createdAt || !cursor.id) return { limit, before: null };
+        return { limit, before: { createdAt: new Date(cursor.createdAt), id: cursor.id } };
+    } catch { return { limit, before: null }; }
+}
+
+function makeCursor(message) {
+    if (!message) return null;
+    return Buffer.from(JSON.stringify({ createdAt: message.createdAt, id: message._id })).toString("base64url");
+}
+
+async function isMessageParticipant(message, userId) {
+    if (message.groupId) {
+        return Boolean(await Group.exists({ _id: message.groupId, members: userId }));
+    }
     return (
         message.senderId.toString() === userId.toString() ||
         message.receiverId.toString() === userId.toString()
     );
 }
 
+async function getMessageSocketIds(message) {
+    if (message.groupId) {
+        const group = await Group.findById(message.groupId).select("members");
+        return [...new Set((group?.members || []).flatMap((member) => getReceiverSocketId(member)))];
+    }
+    return [...new Set([...getReceiverSocketId(message.senderId), ...getReceiverSocketId(message.receiverId)])];
+}
+
 async function populateReply(messageId) {
     return Message.findById(messageId).populate("replyTo", MESSAGE_POPULATE);
+}
+
+export async function getSharedMedia(req, res) {
+    try {
+        const userId = req.userId;
+        const peerId = req.params.id;
+        const messages = await Message.find({
+            $or: [{ senderId: userId, receiverId: peerId }, { senderId: peerId, receiverId: userId }],
+            deletedFor: { $nin: [userId] },
+            $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }],
+        }).select("image video audio file fileName fileType fileSize senderId createdAt").sort({ createdAt: -1 }).limit(60);
+        res.json(messages);
+    } catch (error) { res.status(500).json({ message: "Internal server error" }); }
+}
+
+export async function uploadMedia(req, res) {
+    try {
+        if (!req.file) return res.status(400).json({ message: "A file is required." });
+        if (!hasImagekitConfig()) return res.status(503).json({ message: "Media upload is not configured." });
+        const url = await uploadChatMedia(req.file);
+        res.status(201).json({ url, fileName: req.file.originalname, fileType: req.file.mimetype, fileSize: req.file.size });
+    } catch (error) { res.status(500).json({ message: "Failed to upload media." }); }
 }
 
 export async function getUsersForSidebar(req, res) {
     try {
         const loggedInUser = req.userId;
+        const query = String(req.query.q || "").trim().toLowerCase();
+        if (query && !/^[a-z0-9_.-]{1,30}$/.test(query)) {
+            return res.status(200).json([]);
+        }
+        const usernameFilter = query
+            ? { username: { $regex: `^${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, $options: "i" } }
+            : {};
 
         const filteredUsers = await User.find({
             _id: { $ne: loggedInUser },
-        }).select("-password -__v");
+            ...usernameFilter,
+        }).select("fullName username profilePic email bio").limit(query ? 20 : 0).lean();
 
         res.status(200).json(filteredUsers);
     } catch (error) {
@@ -89,7 +147,30 @@ export async function getConversationsForSidebar(req, res) {
                     },
                 },
             },
-            { $project: { password: 0, unread: 0 } },
+            {
+                $project: {
+                    fullName: 1,
+                    username: 1,
+                    profilePic: 1,
+                    email: 1,
+                    bio: 1,
+                    unreadCount: 1,
+                    lastMessageAt: 1,
+                    lastMessage: {
+                        _id: "$lastMessage._id",
+                        senderId: "$lastMessage.senderId",
+                        receiverId: "$lastMessage.receiverId",
+                        text: "$lastMessage.text",
+                        image: "$lastMessage.image",
+                        video: "$lastMessage.video",
+                        audio: "$lastMessage.audio",
+                        file: "$lastMessage.file",
+                        fileName: "$lastMessage.fileName",
+                        createdAt: "$lastMessage.createdAt",
+                        readAt: "$lastMessage.readAt",
+                    },
+                },
+            },
 
         ])
 
@@ -108,17 +189,33 @@ export async function getMessages(req, res) {
 
         await markUnreadMessagesAsRead(senderId, receiverId);
 
-        const messages = await Message.find({
+        const filter = {
             $or: [
                 { senderId: senderId, receiverId: receiverId },
                 { senderId: receiverId, receiverId: senderId },
             ],
             deletedFor: { $nin: [senderId] },
-        })
-            .populate("replyTo", MESSAGE_POPULATE)
-            .sort({ createdAt: 1 });
+        };
 
-        res.status(200).json(messages);
+        // The legacy array response remains available unless a client opts into pagination.
+        if (req.query.paginated !== "true") {
+            const messages = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE).sort({ createdAt: 1 });
+            return res.status(200).json(messages);
+        }
+
+        const { limit, before } = getPageOptions(req);
+        if (before) {
+            filter.$and = [{ $or: [
+                { createdAt: { $lt: before.createdAt } },
+                { createdAt: before.createdAt, _id: { $lt: before.id } },
+            ] }];
+        }
+        const page = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE)
+            .sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
+        const hasMore = page.length > limit;
+        const messages = (hasMore ? page.slice(0, limit) : page).reverse();
+
+        res.status(200).json({ messages, hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
     } catch (error) {
         console.log("Error in getMessages: ", error.message);
         res.status(500).json({ error: "Internal server error" });
@@ -272,7 +369,7 @@ export async function togglePinMessage(req, res) {
             return res.status(404).json({ message: "Message not found" });
         }
 
-        if (!isMessageParticipant(message, userId)) {
+        if (!(await isMessageParticipant(message, userId))) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -283,9 +380,7 @@ export async function togglePinMessage(req, res) {
         await message.save();
 
         const populatedMessage = await populateReply(message._id);
-        const senderSocketIds = getReceiverSocketId(message.senderId.toString());
-        const receiverSocketIds = getReceiverSocketId(message.receiverId.toString());
-        const socketIds = [...new Set([...senderSocketIds, ...receiverSocketIds])];
+        const socketIds = await getMessageSocketIds(message);
 
         if (socketIds.length > 0) {
             io.to(socketIds).emit("messagePinned", populatedMessage);
@@ -325,7 +420,7 @@ export async function forwardMessage(req, res) {
             return res.status(404).json({ message: "Message not found" });
         }
 
-        if (!isMessageParticipant(originalMessage, senderId)) {
+        if (!(await isMessageParticipant(originalMessage, senderId))) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -408,16 +503,8 @@ export const editMessage = async (req, res) => {
         await message.save();
         const populatedMessage = await populateReply(message._id);
 
-        const receiverSocketId = getReceiverSocketId(message.receiverId.toString());
-        const senderSocketId = getReceiverSocketId(message.senderId.toString());
-
-        if (receiverSocketId) {
-            io.to(receiverSocketId).emit("messageEdited", populatedMessage);
-        }
-
-        if (senderSocketId) {
-            io.to(senderSocketId).emit("messageEdited", populatedMessage);
-        }
+        const socketIds = await getMessageSocketIds(message);
+        if (socketIds.length) io.to(socketIds).emit("messageEdited", populatedMessage);
 
         res.status(200).json(populatedMessage);
     } catch (error) {
@@ -442,7 +529,7 @@ export const toggleReaction = async (req, res) => {
             return res.status(404).json({ message: "Message not found" });
         }
 
-        if (!isMessageParticipant(message, userId)) {
+        if (!(await isMessageParticipant(message, userId))) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -461,9 +548,7 @@ export const toggleReaction = async (req, res) => {
         await message.save();
 
         const populatedMessage = await populateReply(message._id);
-        const senderSocketIds = getReceiverSocketId(message.senderId.toString());
-        const receiverSocketIds = getReceiverSocketId(message.receiverId.toString());
-        const socketIds = [...new Set([...senderSocketIds, ...receiverSocketIds])];
+        const socketIds = await getMessageSocketIds(message);
 
         if (socketIds.length > 0) {
             io.to(socketIds).emit("messageReaction", populatedMessage);
@@ -489,9 +574,9 @@ export const deleteMessage = async (req, res) => {
         }
 
         const isSender = message.senderId.toString() === myId.toString();
-        const isReceiver = message.receiverId.toString() === myId.toString();
+        const isReceiver = message.receiverId && message.receiverId.toString() === myId.toString();
 
-        if (!isSender && !isReceiver) {
+        if (!isSender && !isReceiver && !(await isMessageParticipant(message, myId))) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -504,11 +589,8 @@ export const deleteMessage = async (req, res) => {
 
             await Message.findByIdAndDelete(id);
 
-            const receiverSocketId = getReceiverSocketId(message.receiverId.toString());
-            const senderSocketId = getReceiverSocketId(message.senderId.toString());
-
-            if (receiverSocketId) io.to(receiverSocketId).emit("messageDeleted", id);
-            if (senderSocketId) io.to(senderSocketId).emit("messageDeleted", id);
+            const socketIds = await getMessageSocketIds(message);
+            if (socketIds.length) io.to(socketIds).emit("messageDeleted", id);
 
             return res.status(200).json({
                 messageId: id,

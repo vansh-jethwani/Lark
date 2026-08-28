@@ -15,6 +15,7 @@ import messageRoutes from "./routes/message.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import {app, server} from "./lib/socket.js"
 import profileRoutes from "./routes/profile.routes.js";
+import groupRoutes from "./routes/group.routes.js";
 
 dotenv.config();
 const PORT = process.env.PORT;
@@ -47,6 +48,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/profile", profileRoutes);
+app.use("/api/groups", groupRoutes);
 
 // if the public directory exists, serve the static files
 // this is for the production build
@@ -58,12 +60,21 @@ if (fs.existsSync(publicDir)) {
     });
 }
 
-server.listen(PORT, () => {
-    dbConnect();
+async function startServer() {
+    try {
+        await dbConnect();
+        server.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
     console.log("JWT_SECRET exists:", !!process.env.JWT_SECRET);
 
     if(process.env.NODE_ENV === "production"){
         job.start();
     }
-});
+        });
+    } catch (error) {
+        console.error("Unable to start server:", error.message);
+        process.exit(1);
+    }
+}
+
+startServer();

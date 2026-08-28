@@ -35,6 +35,9 @@ export function MessageList() {
 
   const typingUsers = useChatStore((state) => state.typingUsers);
   const deleteMessages = useChatStore((state) => state.deleteMessages);
+  const loadOlderMessages = useChatStore((state) => state.loadOlderMessages);
+  const hasMoreMessages = useChatStore((state) => state.hasMoreMessages);
+  const isLoadingOlderMessages = useChatStore((state) => state.isLoadingOlderMessages);
   const messageSearchQuery = useChatStore((state) => state.messageSearchQuery);
   const normalizedMessageSearchQuery = messageSearchQuery.trim().toLowerCase();
 
@@ -203,15 +206,29 @@ export function MessageList() {
     setDeleteModalOpen(true);
   };
 
+  const handleScroll = async (event) => {
+    const container = event.currentTarget;
+    if (container.scrollTop > 80 || !hasMoreMessages || isLoadingOlderMessages) return;
+    const previousHeight = container.scrollHeight;
+    const didLoad = await loadOlderMessages();
+    if (didLoad) {
+      requestAnimationFrame(() => {
+        container.scrollTop += container.scrollHeight - previousHeight;
+      });
+    }
+  };
+
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden">
       {activeConversation ? (
         <div
           ref={messagesScrollRef}
+          onScroll={handleScroll}
           className={`flex flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3 sm:py-4 ${
             isSelectionActive ? "pb-24" : ""
           }`}
         >
+          {isLoadingOlderMessages ? <p className="py-1 text-center text-xs text-muted">Loading earlier messages…</p> : null}
           {showPinnedBanner ? (
             <PinnedMessageBanner
               message={currentPinnedMessage}

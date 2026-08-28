@@ -14,10 +14,11 @@ export function getInitials(name) {
 
 function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
   const getId = (value) => String(value?._id || value || "");
+  const isGroup = user.type === "group";
   const getSenderName = (senderId) =>
     getId(senderId) === getId(authUser?._id)
       ? authUser?.fullName || "You"
-      : user.fullName;
+      : (senderId?.fullName || user.fullName || "Member");
 
   const mappedMessages = (Array.isArray(messages) ? messages : []).map((message) => {
     const replyTo = message.replyTo
@@ -49,6 +50,7 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
       fileSize: message.fileSize,
       senderId: message.senderId,
       senderName: getSenderName(message.senderId),
+      isGroup,
       isForwarded: Boolean(message.isForwarded),
       forwardedFrom: message.forwardedFrom,
       isPinned: Boolean(message.isPinned),
@@ -64,13 +66,15 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
   return {
     id: user._id,
     peer: {
-      name: user.fullName,
-      subtitle: user.email,
-      isOnline: onlineUsers.includes(user._id),
+      name: isGroup ? user.name : user.fullName,
+      subtitle: isGroup ? `${user.members?.length || 0} members` : user.email,
+      isOnline: isGroup ? false : onlineUsers.includes(user._id),
       avatarUrl: user.profilePic,
-      initials: getInitials(user.fullName),
+      initials: getInitials(isGroup ? user.name : user.fullName),
+      isGroup,
     },
     messages: mappedMessages,
+    isGroup,
   };
 }
 

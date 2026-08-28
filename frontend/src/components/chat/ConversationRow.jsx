@@ -1,8 +1,9 @@
 import { Avatar } from "@heroui/react";
 import { formatMessageTime } from "../../lib/utils";
 import { AvatarWithOnlineIndicator } from "./AvatarWithOnlineIndicator";
+import { memo } from "react";
 
-export function ConversationRow({ user, selected, onSelect }) {
+export const ConversationRow = memo(function ConversationRow({ user, selected, onSelect }) {
   const unreadCount = Number(user.unreadCount || 0);
 
   return (
@@ -46,4 +47,4 @@ export function ConversationRow({ user, selected, onSelect }) {
       </div>
     </button>
   );
-}
+});

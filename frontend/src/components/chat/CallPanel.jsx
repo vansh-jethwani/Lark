@@ -8,9 +8,30 @@ import { useChatStore } from "../../store/useChatStore";
 
 const STUN = "stun:stun.l.google.com:19302";
 const constraints = (type, facingMode = "user") => ({
-  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  video: type === "video" ? { facingMode, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false,
+  audio: {
+    echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true },
+    sampleRate: { ideal: 48000 }, channelCount: { ideal: 1 }, latency: { ideal: 0.02 },
+  },
+  video: type === "video" ? {
+    facingMode: { ideal: facingMode }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 },
+    frameRate: { ideal: 30, max: 30 },
+  } : false,
 });
+async function tuneSender(sender) {
+  if (!sender?.getParameters || !sender.setParameters) return;
+  try {
+    const parameters = sender.getParameters();
+    if (!parameters.encodings?.length) parameters.encodings = [{}];
+    const encoding = parameters.encodings[0];
+    if (sender.track?.kind === "audio") encoding.maxBitrate = 96000;
+    if (sender.track?.kind === "video") {
+      encoding.maxBitrate = 2500000;
+      encoding.maxFramerate = 30;
+      parameters.degradationPreference = "balanced";
+    }
+    await sender.setParameters(parameters);
+  } catch { /* Browsers/network stacks that do not expose sender tuning use their defaults. */ }
+}
 const debug = (...args) => { if (import.meta.env.DEV) console.debug("[WEBRTC]", ...args); };
 
 import { addCallHistory, callStatusLabel, dateLabel, formatCallDuration, groupCallHistory, mergeCallHistory, normalizeCallRecord, readCallHistory, timeLabel } from "../../lib/callHistory";
@@ -146,7 +167,7 @@ function CallHistoryDetail({ entry, inChat = false, isSelectionMode = false, isS
   const metadataLabel = hasDuration ? "Duration" : status;
   const metadataValue = hasDuration ? formatCallDuration(entry.duration) : null;
 
-  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onClick={handleClick} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex w-fit max-w-[min(90%,28rem)] items-start gap-2.5 rounded-2xl px-3 py-2.5 text-xs shadow-sm sm:max-w-[min(75%,28rem)] ${outgoing ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "rounded-bl-md bg-danger/10" : "rounded-bl-md bg-surface"}`}><CombinedCallIcon entry={entry} className={iconTone} /><span className="min-w-0"><span className={`block break-words text-[13px] font-semibold leading-5 ${outgoing ? "text-accent-foreground" : "text-foreground"}`}>{callDescription(entry)}</span><span className={`mt-1 flex min-w-[9.5rem] items-baseline justify-between gap-4 tabular-nums ${detailTone}`}><span className="min-w-0"><span className="font-medium">{metadataLabel}</span>{metadataValue ? <span className="ml-1.5 font-semibold">{metadataValue}</span> : null}</span><time className="shrink-0 text-[11px]" dateTime={entry.createdAt}>{timeLabel(entry.createdAt)}</time></span></span>{selected && !inChat ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
+  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onClick={handleClick} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex w-fit max-w-[min(90%,28rem)] items-start gap-2.5 rounded-2xl px-3 py-2.5 text-xs shadow-sm sm:max-w-[min(75%,28rem)] ${outgoing ? "rounded-br-md bg-accent text-accent-foreground" : "rounded-bl-md bg-surface"}`}><CombinedCallIcon entry={entry} className={iconTone} /><span className="min-w-0"><span className={`block break-words text-[13px] font-semibold leading-5 ${outgoing ? "text-accent-foreground" : "text-foreground"}`}>{callDescription(entry)}</span><span className={`mt-1 flex min-w-[9.5rem] items-baseline justify-between gap-4 tabular-nums ${detailTone}`}><span className="min-w-0"><span className="font-medium">{metadataLabel}</span>{metadataValue ? <span className="ml-1.5 font-semibold">{metadataValue}</span> : null}</span><time className="shrink-0 text-[11px]" dateTime={entry.createdAt}>{timeLabel(entry.createdAt)}</time></span></span>{selected && !inChat ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
 }
 
 function CallLogContextMenu({ position, onClose, onSelect, onDelete }) {
@@ -208,13 +229,13 @@ export function CallPanel() {
   };
   const flushCandidates = async (connection) => { for (const candidate of candidateQueueRef.current.splice(0)) await connection.addIceCandidate(candidate); };
   const createPeer = (peer) => {
-    const connection = new RTCPeerConnection({ iceServers: [{ urls: STUN }] });
+    const connection = new RTCPeerConnection({ iceServers: [{ urls: STUN }], iceCandidatePoolSize: 4, bundlePolicy: "max-bundle" });
     peerRef.current = connection;
     connection.onicecandidate = ({ candidate }) => { if (candidate) socket?.emit("call:signal", { receiverId: peer.id, callId: callRef.current?.id, signal: { candidate } }); };
     connection.ontrack = ({ streams, track }) => { const stream = streams[0] || remoteStreamRef.current || new MediaStream(); if (!streams[0] && !stream.getTracks().includes(track)) stream.addTrack(track); attachRemote(stream); debug("remote track", track.kind); };
     connection.onconnectionstatechange = () => { debug("connection state", connection.connectionState); if (connection.connectionState === "connected") setCurrentCall({ ...callRef.current, status: "connected" }); if (connection.connectionState === "disconnected") setCurrentCall({ ...callRef.current, status: "reconnecting" }); if (connection.connectionState === "failed") setStatusText("Connection lost. Please try the call again."); };
     connection.oniceconnectionstatechange = () => debug("ICE state", connection.iceConnectionState);
-    localStreamRef.current?.getTracks().forEach((track) => connection.addTrack(track, localStreamRef.current));
+    localStreamRef.current?.getTracks().forEach((track) => tuneSender(connection.addTrack(track, localStreamRef.current)));
     return connection;
   };
   const finish = (status = "completed") => {
@@ -288,6 +309,7 @@ export function CallPanel() {
       const sender = peerRef.current?.getSenders().find((item) => item.track?.kind === "video");
       if (!newTrack || !sender) throw new Error("Video track is unavailable");
       await sender.replaceTrack(newTrack);
+      await tuneSender(sender);
       const oldTrack = localStreamRef.current?.getVideoTracks()[0];
       const nextStream = new MediaStream([...(localStreamRef.current?.getAudioTracks() || []), newTrack]);
       oldTrack?.stop();

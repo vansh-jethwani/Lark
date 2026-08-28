@@ -26,6 +26,7 @@ function App() {
         <PushNotificationManager enabled={Boolean(authUser)} />
         <Routes>
           <Route path="/" element={authUser ? <ChatPage /> : <Navigate to={"/auth"} replace />} />
+          <Route path="/chat/:conversationId/info" element={authUser ? <ChatPage /> : <Navigate to={"/auth"} replace />} />
           <Route
             path="/profile"
             element={authUser ? <ProfileSettingsPage /> : <Navigate to={"/auth"} replace />}

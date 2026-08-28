@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import {
   CheckCheckIcon,
   CheckIcon,
@@ -14,7 +14,6 @@ import { useChatStore } from "../../store/useChatStore";
 import { MessageContextMenu } from "./MessageContextMenu";
 import { DeleteMessageModal } from "./DeleteMessageModal";
 import { ForwardMessageModal } from "./ForwardMessageModal";
-import { MediaDownloadCard } from "./MediaDownloadCard";
 import { MediaPreviewModal } from "./MediaPreviewModal";
 import { ReplySnippet } from "./ReplySnippet";
 import { ReactionSummary } from "./ReactionBar";
@@ -25,20 +24,6 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
 const IMAGE_TRANSFORM = "q-auto,w-640,f-auto";
-const DOWNLOADED_MEDIA_STORAGE_KEY = "lark-downloaded-chat-media";
-
-function readDownloadedMediaIds() {
-  try {
-    return JSON.parse(sessionStorage.getItem(DOWNLOADED_MEDIA_STORAGE_KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function writeDownloadedMediaIds(ids) {
-  sessionStorage.setItem(DOWNLOADED_MEDIA_STORAGE_KEY, JSON.stringify(ids));
-}
-
 function HighlightedMessageText({ text, query }) {
   const value = String(text || "");
   const normalizedQuery = query.trim();
@@ -65,7 +50,7 @@ function HighlightedMessageText({ text, query }) {
   return parts;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   isHighlighted = false,
   isSelectionMode = false,
@@ -81,8 +66,7 @@ export function MessageBubble({
   const hasVideo = Boolean(message.videoUrl);
   const hasAudio = Boolean(message.audioUrl);
   const hasFile = Boolean(message.fileUrl);
-  const imageMediaId = `${message.id}:image`;
-  const videoMediaId = `${message.id}:video`;
+  const hasVisualMedia = hasImage || hasVideo;
 
   const statusLabel = message.readAt ? "Read" : message.deliveredAt ? "Delivered" : "Sent";
   const StatusIcon = message.deliveredAt || message.readAt ? CheckCheckIcon : CheckIcon;
@@ -96,10 +80,8 @@ export function MessageBubble({
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [forwardModalOpen, setForwardModalOpen] = useState(false);
   const [previewMedia, setPreviewMedia] = useState(null);
-  const [downloadedMediaIds, setDownloadedMediaIds] = useState(readDownloadedMediaIds);
+  const [imageUnavailable, setImageUnavailable] = useState(false);
   const { setReplyingTo } = useChatStore();
-  const isImageDownloaded = isOwnMessage || downloadedMediaIds.includes(imageMediaId);
-  const isVideoDownloaded = isOwnMessage || downloadedMediaIds.includes(videoMediaId);
 
   const handleOpenDeletePopup = () => {
     setMenuOpen(false);
@@ -191,14 +173,7 @@ export function MessageBubble({
     setPreviewMedia(media);
   };
 
-  const markMediaDownloaded = (mediaId) => {
-    setDownloadedMediaIds((current) => {
-      if (current.includes(mediaId)) return current;
-      const next = [...current, mediaId];
-      writeDownloadedMediaIds(next);
-      return next;
-    });
-  };
+  const isMediaOnly = (hasImage || hasVideo || hasAudio || hasFile) && !message.text && !message.replyTo;
 
   return (
     <div
@@ -216,13 +191,16 @@ export function MessageBubble({
       <div className="group relative max-w-[min(90%,28rem)] sm:max-w-[min(75%,28rem)]">
         <div
           onContextMenu={handleRightClick}
-          className={`rounded-2xl px-3 py-2 text-[15px] leading-snug shadow-sm transition-shadow sm:px-3.5 ${
+          className={`rounded-2xl ${isMediaOnly ? "p-1 shadow-none" : hasVisualMedia ? "p-1" : "px-3 py-2 sm:px-3.5"} text-[15px] leading-snug shadow-sm transition-shadow ${
             isHighlighted ? "ring-2 ring-accent/70" : ""
           } ${isOwnMessage
             ? "rounded-br-md bg-accent text-accent-foreground"
             : "rounded-bl-md bg-surface"
             }`}
         >
+          {message.isGroup && !isOwnMessage ? (
+            <p className="mb-1 text-xs font-semibold text-accent">{message.senderName}</p>
+          ) : null}
           {(message.isPinned || message.isForwarded) && (
             <div
               className={`mb-1 flex flex-wrap items-center gap-2 text-[11px] font-medium ${
@@ -244,16 +222,7 @@ export function MessageBubble({
             </div>
           )}
 
-          {hasImage && !isImageDownloaded ? (
-            <MediaDownloadCard
-              type="image"
-              fileName={message.fileName || "Photo"}
-              fileSize={message.fileSize}
-              onDownload={() => markMediaDownloaded(imageMediaId)}
-            />
-          ) : null}
-
-          {hasImage && isImageDownloaded && (
+          {hasImage && !imageUnavailable && (
             <button
               type="button"
               onClick={() =>
@@ -263,27 +232,23 @@ export function MessageBubble({
                   fileName: message.fileName || "Photo",
                 })
               }
-              className="mb-1.5 block max-w-full cursor-zoom-in overflow-hidden rounded-lg sm:rounded-xl"
+              className="mb-px block max-w-full cursor-zoom-in overflow-hidden rounded-md"
               aria-label="Open image preview"
             >
               <img
                 src={withTransform(message.imageUrl, IMAGE_TRANSFORM)}
                 alt=""
-                className="max-h-40 max-w-full object-cover sm:max-h-52"
+                className="h-[clamp(12rem,32vw,16rem)] w-[clamp(14rem,42vw,22rem)] max-w-[72vw] object-cover"
+                loading="lazy"
+                decoding="async"
+                onError={() => setImageUnavailable(true)}
               />
             </button>
           )}
 
-          {hasVideo && !isVideoDownloaded ? (
-            <MediaDownloadCard
-              type="video"
-              fileName={message.fileName || "Video"}
-              fileSize={message.fileSize}
-              onDownload={() => markMediaDownloaded(videoMediaId)}
-            />
-          ) : null}
+          {hasImage && imageUnavailable ? <a href={message.imageUrl} target="_blank" rel="noreferrer" className="mb-px block rounded-md bg-background/60 px-1.5 py-1 text-xs text-accent">Open photo</a> : null}
 
-          {hasVideo && isVideoDownloaded && (
+          {hasVideo && (
             <MessageVideo
               src={message.videoUrl}
               onOpen={() =>
@@ -303,12 +268,12 @@ export function MessageBubble({
               href={message.fileUrl}
               target="_blank"
               rel="noreferrer"
-              className={`mb-1.5 flex max-w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${isOwnMessage
+            className={`mb-px flex max-w-full items-center gap-1.5 rounded-md border px-1.5 py-1 text-sm ${isOwnMessage
                 ? "border-accent-foreground/20 bg-accent-foreground/10"
                 : "border-border bg-background"
                 }`}
             >
-              <FileTextIcon className="size-5 shrink-0" aria-hidden />
+              <FileTextIcon className="size-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1 truncate">
                 {message.fileName || "Document"}
               </span>
@@ -329,7 +294,7 @@ export function MessageBubble({
 
           {message.text ? (
             searchQuery.trim() ? (
-              <p className="whitespace-pre-wrap break-words">
+              <p className={`whitespace-pre-wrap break-words ${hasVisualMedia ? "px-2.5 pt-1" : ""}`}>
                 <HighlightedMessageText text={message.text} query={searchQuery} />
                 {message.isEdited && (
                   <span className="ml-2 text-xs italic opacity-70">
@@ -338,7 +303,7 @@ export function MessageBubble({
                 )}
               </p>
             ) : !isOwnMessage ? (
-              <div className="whitespace-normal break-words [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:text-lg [&_h3]:font-semibold [&_strong]:font-bold [&_em]:italic [&_ul]:ml-6 [&_ul]:my-2 [&_ul]:list-disc [&_ol]:ml-6 [&_ol]:my-2 [&_ol]:list-decimal [&_li]:my-1 [&_blockquote]:border-l-4 [&_blockquote]:pl-3 [&_blockquote]:italic [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5">
+              <div className={`whitespace-normal break-words [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:text-lg [&_h3]:font-semibold [&_strong]:font-bold [&_em]:italic [&_ul]:ml-6 [&_ul]:my-2 [&_ul]:list-disc [&_ol]:ml-6 [&_ol]:my-2 [&_ol]:list-decimal [&_li]:my-1 [&_blockquote]:border-l-4 [&_blockquote]:pl-3 [&_blockquote]:italic [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-zinc-900 [&_pre]:p-3 [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 ${hasVisualMedia ? "px-2.5 pt-1" : ""}`}>
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight]}
@@ -353,7 +318,7 @@ export function MessageBubble({
                 )}
               </div>
             ) : (
-              <p className="whitespace-pre-wrap break-words">
+              <p className={`whitespace-pre-wrap break-words ${hasVisualMedia ? "px-2.5 pt-1" : ""}`}>
                 {message.text}
 
                 {message.isEdited && (
@@ -366,7 +331,7 @@ export function MessageBubble({
           ) : null}
 
           <p
-            className={`mt-1 flex items-center justify-end gap-1 text-[11px] tabular-nums ${isOwnMessage ? "text-accent-foreground/75" : "text-muted"
+            className={`mt-1 flex items-center justify-end gap-1 text-[11px] tabular-nums ${hasVisualMedia && !isMediaOnly ? "px-2.5 pb-1" : ""} ${isOwnMessage ? "text-accent-foreground/75" : "text-muted"
               }`}
           >
             <span>{message.time}</span>
@@ -425,12 +390,14 @@ export function MessageBubble({
         />
 
         <MediaPreviewModal
+          key={previewMedia?.src || "closed"}
           media={previewMedia}
           onClose={() => setPreviewMedia(null)}
+          onForward={() => { setPreviewMedia(null); setForwardModalOpen(true); }}
         />
       </div>
 
       {isSelectionMode && isOwnMessage ? <SelectionOverlay selected={isSelected} /> : null}
     </div>
   )
-}
+});

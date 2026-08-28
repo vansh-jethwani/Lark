@@ -9,8 +9,11 @@ const messageSchema = new mongoose.Schema({
   receiverId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: true
+    required: function () { return !this.groupId; },
+    default: null,
   },
+  // Kept optional so existing direct-message documents need no migration.
+  groupId: { type: mongoose.Schema.Types.ObjectId, ref: "Group", default: null, index: true },
   text: {
     type: String,
     default: ""
@@ -101,6 +104,12 @@ const messageSchema = new mongoose.Schema({
     },
   ],
 }, { timestamps: true });
+
+messageSchema.index({ groupId: 1, createdAt: 1 });
+// Direct-message history, sidebar lookups, and unread counts all use these paths.
+messageSchema.index({ senderId: 1, receiverId: 1, createdAt: -1 });
+messageSchema.index({ receiverId: 1, senderId: 1, readAt: 1, createdAt: -1 });
+messageSchema.index({ groupId: 1, createdAt: -1 });
 
 const Message = mongoose.model("Message", messageSchema);
 export default Message;

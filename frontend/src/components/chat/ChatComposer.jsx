@@ -3,6 +3,7 @@ import { MicIcon, PaperclipIcon, LoaderIcon, SendHorizontalIcon, SquareIcon } fr
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
+import { useAuthStore } from "../../store/useAuthStore";
 import { ReplyPreview } from "./ReplyPreview";
 import { EditPreview } from "./EditPreview";
 import { MediaSendPreviewModal } from "./MediaSendPreviewModal";
@@ -14,7 +15,8 @@ export function ChatComposer() {
   const isSendingMedia = useChatStore((state) => state.isSendingMedia);
   const sendTextMessage = useChatStore((state) => state.sendTextMessage);
   const setComposerText = useChatStore((state) => state.setComposerText);
-  const { activeConversationId } = useSelectedConversation();
+  const { activeConversationId, activeConversation } = useSelectedConversation();
+  const authUser = useAuthStore((state) => state.authUser);
   const editingMessage = useChatStore((state) => state.editingMessage);
   const clearEditingMessage = useChatStore((state) => state.clearEditingMessage);
   const mediaInputRef = useRef(null);
@@ -26,6 +28,8 @@ export function ChatComposer() {
   const sendTypingStatus = useChatStore((state) => state.sendTypingStatus);
   const typingTimeoutRef = useRef(null);
   const { replyingTo, clearReplyingTo } = useChatStore();
+  const selectedGroup = useChatStore((state) => state.conversations.find((item) => String(item._id) === String(activeConversationId)));
+  const groupSendRestricted = activeConversation?.isGroup && selectedGroup?.permissions?.sendMessages === "admins" && !selectedGroup.admins?.some((admin) => String(admin._id || admin) === String(authUser?._id));
 
   const resizeComposer = () => {
     const textArea = textAreaRef.current;
@@ -112,6 +116,7 @@ export function ChatComposer() {
 
   return (
     <footer className="shrink-0 border-t border-border px-1.5 pb-2 pt-2 sm:px-2">
+      {groupSendRestricted ? <p className="mx-auto mb-2 max-w-full rounded-xl bg-surface px-3 py-2 text-center text-sm text-muted">Only group admins can send messages.</p> : null}
       <EditPreview message={editingMessage} onClose={clearEditingMessage} />
       <ReplyPreview message={replyingTo} onClose={clearReplyingTo} />
       {isSendingMedia ? (
@@ -130,7 +135,7 @@ export function ChatComposer() {
           type="file"
           accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.txt,.csv"
           className="sr-only"
-          disabled={isSendingMedia}
+          disabled={isSendingMedia || groupSendRestricted}
           tabIndex={-1}
           aria-hidden
           onChange={handleMediaPick}
@@ -138,7 +143,7 @@ export function ChatComposer() {
         <Button
           variant="ghost"
           isIconOnly
-          isDisabled={isSendingMedia}
+          isDisabled={isSendingMedia || groupSendRestricted}
           className="mb-1 size-9 shrink-0 touch-manipulation self-end text-accent"
           onPress={() => mediaInputRef.current?.click()}
         >
@@ -151,6 +156,7 @@ export function ChatComposer() {
           placeholder="Message"
           rows={1}
           value={composerText}
+          disabled={groupSendRestricted}
           onChange={handleComposerTextChange}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
@@ -166,7 +172,7 @@ export function ChatComposer() {
           <Button
             variant="primary"
             isIconOnly
-            isDisabled={!composerText.trim()}
+            isDisabled={!composerText.trim() || groupSendRestricted}
             className="mb-1 size-10 shrink-0 self-end rounded-full"
             onPress={handleSend}
           >
@@ -176,7 +182,7 @@ export function ChatComposer() {
           <Button
             variant={isRecordingVoice ? "primary" : "ghost"}
             isIconOnly
-            isDisabled={isSendingMedia}
+            isDisabled={isSendingMedia || groupSendRestricted}
             className="mb-1 size-10 shrink-0 self-end rounded-full"
             onPress={handleVoiceRecord}
           >

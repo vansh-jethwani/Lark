@@ -7,8 +7,9 @@ import toast from "react-hot-toast";
 
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
+const asId = (value) => String(value?._id || value || "");
 const getMessagePartnerId = (message, authUserId) =>
-  String(message.senderId) === String(authUserId) ? String(message.receiverId) : String(message.senderId);
+  message.groupId ? asId(message.groupId) : asId(message.senderId) === String(authUserId) ? asId(message.receiverId) : asId(message.senderId);
 
 function sortConversations(conversations) {
   return [...asArray(conversations)].sort(
@@ -52,17 +53,22 @@ export const useChatStore = create(
   persist(
     (set, get) => ({
       users: [],
+      searchedUsers: [],
       conversations: [],
       messages: [],
       selectedUser: null,
       isConversationsLoading: false,
       isUsersLoading: false,
       isMessagesLoading: false,
+      isLoadingOlderMessages: false,
+      hasMoreMessages: false,
+      nextMessageCursor: null,
       activeConversationId: null,
       searchQuery: "",
       sidebarTab: "chats",
       messageSearchQuery: "",
       composerText: "",
+      drafts: {},
       replyingTo: null,
       editingMessage: null,
       isSendingMedia: false,
@@ -90,8 +96,20 @@ export const useChatStore = create(
       getConversations: async () => {
         set({ isConversationsLoading: true });
         try {
-          const res = await axiosInstance.get("/messages/conversations");
-          set({ conversations: sortConversations(res.data) });
+          const [directRes, groupsRes] = await Promise.all([
+            axiosInstance.get("/messages/conversations"),
+            axiosInstance.get("/groups"),
+          ]);
+          const conversations = sortConversations([
+            ...asArray(directRes.data),
+            ...asArray(groupsRes.data).map((group) => ({ ...group, type: "group" })),
+          ]);
+          set((state) => ({
+            conversations,
+            selectedUser: state.activeConversationId
+              ? conversations.find((conversation) => String(conversation._id) === String(state.activeConversationId)) || null
+              : state.selectedUser,
+          }));
         } catch (error) {
           console.log("Error in getConversations", error.message);
         } finally {
@@ -100,12 +118,17 @@ export const useChatStore = create(
       },
 
       getMessages: async (userId) => {
-        set({ isMessagesLoading: true, messages: [] });
+        set({ isMessagesLoading: true, messages: [], hasMoreMessages: false, nextMessageCursor: null });
         try {
-          const res = await axiosInstance.get(`/messages/${userId}`);
+          const conversation = get().conversations.find((item) => String(item._id) === String(userId));
+          const baseUrl = conversation?.type === "group" ? `/groups/${userId}/messages` : `/messages/${userId}`;
+          const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40`);
+          const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
           if (get().activeConversationId === userId) {
             set((state) => ({
-              messages: asArray(res.data),
+              messages: asArray(payload.messages),
+              hasMoreMessages: Boolean(payload.hasMore),
+              nextMessageCursor: payload.nextCursor || null,
               conversations: updateConversation(state.conversations, userId, (conversation) => ({
                 ...conversation,
                 unreadCount: 0,
@@ -122,6 +145,55 @@ export const useChatStore = create(
             set({ isMessagesLoading: false });
           }
         }
+      },
+
+      searchUsers: async (query) => {
+        const normalizedQuery = String(query || "").trim();
+        if (!normalizedQuery) return set({ searchedUsers: [] });
+        try {
+          const res = await axiosInstance.get(`/messages/users?q=${encodeURIComponent(normalizedQuery)}`);
+          set({ searchedUsers: asArray(res.data) });
+        } catch (error) {
+          console.log("Error searching users", error.message);
+          set({ searchedUsers: [] });
+        }
+      },
+
+      openDirectChat: (user) => {
+        if (!user?._id) return;
+        set((state) => ({
+          users: state.users.some((item) => String(item._id) === String(user._id)) ? state.users : [...state.users, user],
+          activeConversationId: user._id,
+          selectedUser: user,
+          messages: [],
+          composerText: state.drafts?.[user._id] || "",
+          messageSearchQuery: "",
+        }));
+      },
+
+      loadOlderMessages: async () => {
+        const { activeConversationId, nextMessageCursor, hasMoreMessages, isLoadingOlderMessages } = get();
+        if (!activeConversationId || !nextMessageCursor || !hasMoreMessages || isLoadingOlderMessages) return false;
+        const conversation = get().conversations.find((item) => String(item._id) === String(activeConversationId));
+        const baseUrl = conversation?.type === "group" ? `/groups/${activeConversationId}/messages` : `/messages/${activeConversationId}`;
+        set({ isLoadingOlderMessages: true });
+        try {
+          const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40&before=${encodeURIComponent(nextMessageCursor)}`);
+          const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
+          if (String(get().activeConversationId) !== String(activeConversationId)) return false;
+          set((state) => {
+            const existing = new Set(asArray(state.messages).map((message) => String(message._id)));
+            return {
+              messages: [...asArray(payload.messages).filter((message) => !existing.has(String(message._id))), ...asArray(state.messages)],
+              hasMoreMessages: Boolean(payload.hasMore),
+              nextMessageCursor: payload.nextCursor || null,
+            };
+          });
+          return true;
+        } catch (error) {
+          toast.error(error.response?.data?.message || "Failed to load older messages");
+          return false;
+        } finally { set({ isLoadingOlderMessages: false }); }
       },
 
       sendMessage: async (messageData) => {
@@ -149,7 +221,7 @@ export const useChatStore = create(
           }
 
           const res = await axiosInstance.post(
-            `/messages/send/${selectedUser._id}`,
+            selectedUser.type === "group" ? `/groups/${selectedUser._id}/messages` : `/messages/send/${selectedUser._id}`,
             finalMessageData
           );
           set((state) => ({
@@ -159,6 +231,7 @@ export const useChatStore = create(
               ? state.messages
               : [...asArray(state.messages), res.data],
             composerText: "",
+            drafts: { ...state.drafts, [selectedUser._id]: "" },
             replyingTo: null,
             conversations: upsertConversation(state.conversations, selectedUser, res.data, 0),
           }));
@@ -168,6 +241,35 @@ export const useChatStore = create(
           return false;
         }
       },
+
+      createGroup: async (payload) => {
+        try {
+          const res = await axiosInstance.post("/groups", payload);
+          const group = { ...res.data, type: "group" };
+          set((state) => ({ conversations: upsertConversation(state.conversations, group, null, 0) }));
+          toast.success("Group created");
+          return group;
+        } catch (error) { toast.error(error.response?.data?.message || "Failed to create group"); return null; }
+      },
+      updateGroup: async (groupId, payload) => {
+        try { const res = await axiosInstance.patch(`/groups/${groupId}`, payload); const group = { ...res.data, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })), selectedUser: state.selectedUser?._id === groupId ? { ...state.selectedUser, ...group } : state.selectedUser })); return group; }
+        catch (error) { toast.error(error.response?.data?.message || "Failed to update group"); return null; }
+      },
+      addGroupMembers: async (groupId, memberIds) => {
+        try { const res = await axiosInstance.post(`/groups/${groupId}/members`, { memberIds }); const group = { ...res.data, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })), selectedUser: state.selectedUser?._id === groupId ? { ...state.selectedUser, ...group } : state.selectedUser })); return group; }
+        catch (error) { toast.error(error.response?.data?.message || "Failed to add members"); return null; }
+      },
+      removeGroupMember: async (groupId, userId) => {
+        try { const res = await axiosInstance.delete(`/groups/${groupId}/members/${userId}`); const group = { ...res.data.group, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })), selectedUser: state.selectedUser?._id === groupId ? { ...state.selectedUser, ...group } : state.selectedUser })); return group; }
+        catch (error) { toast.error(error.response?.data?.message || "Failed to remove member"); return null; }
+      },
+      leaveGroup: async (groupId) => {
+        try { await axiosInstance.post(`/groups/${groupId}/leave`); set((state) => ({ conversations: state.conversations.filter((c) => String(c._id) !== String(groupId)), activeConversationId: String(state.activeConversationId) === String(groupId) ? null : state.activeConversationId, selectedUser: String(state.selectedUser?._id) === String(groupId) ? null : state.selectedUser })); return true; }
+        catch (error) { toast.error(error.response?.data?.message || "Failed to leave group"); return false; }
+      },
+      promoteAdmin: async (groupId, userId) => { try { const res = await axiosInstance.post(`/groups/${groupId}/admins/${userId}/promote`); const group = { ...res.data, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })) })); return group; } catch (error) { toast.error(error.response?.data?.message || "Failed to promote admin"); return null; } },
+      demoteAdmin: async (groupId, userId) => { try { const res = await axiosInstance.post(`/groups/${groupId}/admins/${userId}/demote`); const group = { ...res.data, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })) })); return group; } catch (error) { toast.error(error.response?.data?.message || "Failed to demote admin"); return null; } },
+      updateGroupPermissions: async (groupId, permissions) => { try { const res = await axiosInstance.patch(`/groups/${groupId}/permissions`, permissions); const group = { ...res.data, type: "group" }; set((state) => ({ conversations: updateConversation(state.conversations, groupId, (old) => ({ ...old, ...group })) })); return group; } catch (error) { toast.error(error.response?.data?.message || "Failed to update permissions"); return null; } },
 
       editMessage: async (messageId, text) => {
         try {
@@ -385,6 +487,30 @@ export const useChatStore = create(
         socket.off("messageReaction");
         socket.off("messageEdited");
         socket.off("messageDeleted");
+        socket.off("group:updated");
+        socket.off("group:member-added");
+        socket.off("group:member-removed");
+        socket.off("group:member-left");
+        socket.off("group:admin-updated");
+        socket.off("group:removed");
+        socket.off("group:left");
+
+        const applyGroupUpdate = (payload) => {
+          const group = { ...(payload.group || payload), type: "group" };
+          if (!group._id) return;
+          set((state) => ({
+            conversations: updateConversation(state.conversations, group._id, (old) => ({ ...old, ...group })),
+            selectedUser: state.selectedUser?._id === group._id ? { ...state.selectedUser, ...group } : state.selectedUser,
+          }));
+        };
+        socket.on("group:updated", applyGroupUpdate);
+        ["group:member-added", "group:member-removed", "group:member-left", "group:admin-updated"].forEach((event) => socket.on(event, applyGroupUpdate));
+        const removeGroup = ({ groupId }) => set((state) => ({
+          conversations: state.conversations.filter((item) => String(item._id) !== String(groupId)),
+          activeConversationId: String(state.activeConversationId) === String(groupId) ? null : state.activeConversationId,
+        }));
+        socket.on("group:removed", removeGroup);
+        socket.on("group:left", removeGroup);
 
         socket.on("typing", ({ senderId, isTyping }) => {
           set((state) => ({
@@ -402,7 +528,7 @@ export const useChatStore = create(
 
           const partnerId = getMessagePartnerId(newMessage, authUserId);
           const isActiveConversation = String(get().activeConversationId) === partnerId;
-          const isIncoming = String(newMessage.senderId) !== String(authUserId);
+          const isIncoming = asId(newMessage.senderId) !== String(authUserId);
 
           set((state) => {
             const partner =
@@ -499,6 +625,7 @@ export const useChatStore = create(
         socket?.off("messageDeleted");
         socket?.off("messagePinned");
         socket?.off("messageReaction");
+        ["group:updated", "group:member-added", "group:member-removed", "group:member-left", "group:admin-updated", "group:removed", "group:left"].forEach((event) => socket?.off(event));
       },
 
       setSelectedUser: (selectedUser) => set({ selectedUser }),
@@ -513,6 +640,8 @@ export const useChatStore = create(
           return {
             activeConversationId,
             selectedUser,
+            composerText: activeConversationId ? state.drafts?.[activeConversationId] || "" : "",
+            messageSearchQuery: "",
             messages:
               activeConversationId === state.activeConversationId
                 ? state.messages
@@ -530,7 +659,12 @@ export const useChatStore = create(
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
-      setComposerText: (composerText) => set({ composerText }),
+      setComposerText: (composerText) => set((state) => ({
+        composerText,
+        drafts: state.activeConversationId
+          ? { ...state.drafts, [state.activeConversationId]: composerText }
+          : state.drafts,
+      })),
       setReplyingTo: (message) => set({ replyingTo: message }),
       setEditingMessage: (message) =>
         set({
@@ -636,6 +770,13 @@ export const useChatStore = create(
     }),
     {
       name: "Lark-storage",
+      // Conversations and message histories are fetched on demand; persisting them makes
+      // startup slower and can exhaust localStorage for active users.
+      partialize: (state) => ({
+        sidebarTab: state.sidebarTab,
+        activeConversationId: state.activeConversationId,
+        drafts: state.drafts,
+      }),
     },
   ),
 );

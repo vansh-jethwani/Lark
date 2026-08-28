@@ -7,6 +7,8 @@ import { ChatHeader } from "../components/chat/ChatHeader";
 import { MessageList } from "../components/chat/MessageList";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { CallPanel } from "../components/chat/CallPanel";
+import { ChatInfoPage } from "../components/chat/ChatInfoPage";
+import { useMatch } from "react-router";
 
 function ChatPage() {
   const [sidebarWidth, setSidebarWidth] = useState(() => Number(localStorage.getItem("lark-sidebar-width")) || 288);
@@ -14,12 +16,14 @@ function ChatPage() {
   const getConversations = useChatStore((state) => state.getConversations);
   const getMessages = useChatStore((state) => state.getMessages);
   const getUsers = useChatStore((state) => state.getUsers);
+  const isConversationsLoading = useChatStore((state) => state.isConversationsLoading);
   const subscribeToChatEvents = useChatStore((state) => state.subscribeToChatEvents);
   const unsubscribeFromMessages = useChatStore((state) => state.unsubscribeFromMessages);
   const socket = useAuthStore((state) => state.socket);
 
   const { activeConversation, activeConversationId, isLargeScreen } =
     useSelectedConversation();
+  const infoRoute = useMatch("/chat/:conversationId/info");
 
   useEffect(() => {
     if (!isResizing) return undefined;
@@ -49,9 +53,9 @@ function ChatPage() {
   }, [getConversations, getUsers]);
 
   useEffect(() => {
-    if (!activeConversationId) return;
+    if (!activeConversationId || isConversationsLoading) return;
     getMessages(activeConversationId);
-  }, [getMessages, activeConversationId]);
+  }, [getMessages, activeConversationId, isConversationsLoading]);
 
   useEffect(() => {
     if (!socket) return;
@@ -62,14 +66,14 @@ function ChatPage() {
   }, [socket, subscribeToChatEvents, unsubscribeFromMessages]);
 
   return (
-    <div className="h-dvh w-screen overflow-hidden bg-background text-foreground">
+    <div className="relative h-dvh w-screen overflow-hidden bg-background text-foreground">
       <div className="flex h-full w-full overflow-hidden bg-background">
         <ChatSidebar width={`${sidebarWidth}px`} />
         {isLargeScreen ? <button type="button" aria-label="Resize sidebar" title="Resize sidebar" onPointerDown={() => setIsResizing(true)} className="group hidden w-1 shrink-0 cursor-col-resize border-r border-border bg-transparent transition-colors hover:bg-primary/50 focus-visible:bg-primary/50 lg:block"><span className="mx-auto block h-10 w-0.5 rounded-full bg-border transition-colors group-hover:bg-primary" /></button> : null}
         <CallPanel />
 
         <main
-          className={`min-w-0 flex-1 flex-col overflow-hidden bg-background ${
+          className={`relative min-w-0 flex-1 flex-col overflow-hidden bg-background ${
             !isLargeScreen && !activeConversationId ? "hidden lg:flex" : "flex"
           }`}
         >
@@ -77,6 +81,11 @@ function ChatPage() {
           <MessageList />
           {activeConversation ? <ChatComposer /> : null}
         </main>
+        {infoRoute ? (
+          <aside className="absolute inset-y-0 right-0 z-40 w-full border-l border-border bg-background shadow-2xl lg:w-[min(36rem,38vw)]">
+            <ChatInfoPage />
+          </aside>
+        ) : null}
       </div>
     </div>
   );

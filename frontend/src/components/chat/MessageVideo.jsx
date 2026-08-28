@@ -23,24 +23,24 @@ export function MessageVideo({ src, onOpen }) {
     <button
       type="button"
       onClick={onOpen}
-      className="relative mb-1.5 block max-w-full cursor-pointer overflow-hidden rounded-lg bg-black sm:rounded-xl"
+      className="relative mb-px block max-w-full cursor-pointer overflow-hidden rounded-md bg-black"
       aria-label="Open video preview"
     >
       {posterSrc ? (
         <img
           src={posterSrc}
           alt=""
-          className="max-h-52 max-w-full object-contain opacity-90 sm:max-h-64"
+          className="h-[clamp(12rem,32vw,16rem)] w-[clamp(14rem,42vw,22rem)] max-w-[72vw] object-cover opacity-90"
         />
       ) : (
-        <span className="grid h-40 min-w-56 place-items-center bg-black text-white/70">
+          <span className="grid h-28 min-w-44 place-items-center bg-black text-white/70">
           Video
         </span>
       )}
 
       <span className="absolute inset-0 grid place-items-center bg-black/20">
-        <span className="grid size-14 place-items-center rounded-full bg-black/65 text-white shadow-lg">
-          <PlayIcon className="ml-0.5 size-7 fill-current" aria-hidden />
+        <span className="grid size-10 place-items-center rounded-full bg-black/65 text-white shadow-lg">
+          <PlayIcon className="ml-0.5 size-5 fill-current" aria-hidden />
         </span>
       </span>
     </button>

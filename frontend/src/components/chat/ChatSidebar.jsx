@@ -5,10 +5,12 @@ import { APP_NAME, AppLogo } from "../AppLogo";
 import { Avatar } from "@heroui/react";
 
 import { SearchField, Tabs } from "@heroui/react";
-import { MessageSquareIcon, PhoneIcon } from "lucide-react";
+import { MessageSquareIcon, PhoneIcon, PlusIcon } from "lucide-react";
 import { Link } from "react-router";
 import { ConversationRow } from "./ConversationRow";
 import { CallHistory } from "./CallPanel";
+import { CreateGroupModal } from "./CreateGroupModal";
+import { useEffect, useMemo, useState } from "react";
 
 function getLastMessagePreview(message) {
   if (!message) return "";
@@ -20,20 +22,21 @@ function getLastMessagePreview(message) {
 }
 
 function mapUserForList(user, onlineUsers) {
+  const isGroup = user.type === "group";
   return {
     conversationId: user._id,
     id: user._id,
-    name: user.fullName,
+    name: isGroup ? user.name : user.fullName,
     email: user.email,
     username: user.username,
     avatarUrl: user.profilePic,
-    initials: getInitials(user.fullName),
-    isOnline: onlineUsers.includes(user._id),
+    initials: getInitials(isGroup ? user.name : user.fullName),
+    isOnline: isGroup ? false : onlineUsers.includes(user._id),
     lastMessagePreview: getLastMessagePreview(user.lastMessage),
     lastMessageAt: user.lastMessageAt,
     unreadCount: Number(user.unreadCount || 0),
     peer: {
-      name: user.fullName,
+      name: isGroup ? user.name : user.fullName,
       avatarUrl: user.profilePic,
       initials: getInitials(user.fullName),
       isOnline: onlineUsers.includes(user._id),
@@ -42,9 +45,10 @@ function mapUserForList(user, onlineUsers) {
 }
 
 function ChatSidebar({ width }) {
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const conversations = useChatStore((state) => state.conversations);
-  const users = useChatStore((state) => state.users);
-
+  const searchedUsers = useChatStore((state) => state.searchedUsers);
+  const searchUsers = useChatStore((state) => state.searchUsers);
   const searchQuery = useChatStore((state) => state.searchQuery);
   const setSearchQuery = useChatStore((state) => state.setSearchQuery);
 
@@ -52,6 +56,7 @@ function ChatSidebar({ width }) {
   const setSidebarTab = useChatStore((state) => state.setSidebarTab);
 
   const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
+  const openDirectChat = useChatStore((state) => state.openDirectChat);
 
   const onlineUsers = useAuthStore((state) => state.onlineUsers);
   const authUser = useAuthStore((state) => state.authUser);
@@ -60,17 +65,30 @@ function ChatSidebar({ width }) {
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
+  useEffect(() => {
+    if (!normalizedSearchQuery) {
+      searchUsers("");
+      return undefined;
+    }
+    const timer = window.setTimeout(() => searchUsers(normalizedSearchQuery), 250);
+    return () => window.clearTimeout(timer);
+  }, [normalizedSearchQuery, searchUsers]);
+
   const conversationUsers = conversations.map((user) => mapUserForList(user, onlineUsers));
   const filteredConversations = normalizedSearchQuery
-    ? users
-      .filter((user) => user.username?.toLowerCase().includes(normalizedSearchQuery))
-      .map((user) => mapUserForList(user, onlineUsers))
+    ? conversations.filter((user) => (user.name || user.fullName || user.username || "").toLowerCase().includes(normalizedSearchQuery)).map((user) => mapUserForList(user, onlineUsers))
     : conversationUsers;
+  const searchResults = useMemo(() => {
+    const seen = new Set(filteredConversations.map((conversation) => String(conversation.id)));
+    return [...filteredConversations, ...searchedUsers
+      .filter((user) => !seen.has(String(user._id)))
+      .map((user) => mapUserForList(user, onlineUsers))];
+  }, [filteredConversations, searchedUsers, onlineUsers]);
 
   return (
     <aside
       style={isLargeScreen && width ? { width } : undefined}
-      className={`w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-auto ${!isLargeScreen && activeConversationId ? "hidden lg:flex" : "flex"
+      className={`relative w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-auto ${!isLargeScreen && activeConversationId ? "hidden lg:flex" : "flex"
         }`}
     >
       <div className="shrink-0 border-b border-border px-2 pb-2 pt-2.5 sm:px-3 sm:pt-3">
@@ -130,17 +148,24 @@ function ChatSidebar({ width }) {
           id="chats"
           className="flex-1 overflow-x-hidden overflow-y-auto outline-none"
         >
-          {filteredConversations.length === 0 ? (
+          {(normalizedSearchQuery ? searchResults : filteredConversations).length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted">
               No conversations match your search.
             </p>
           ) : (
-            filteredConversations.map((conversation) => (
+            (normalizedSearchQuery ? searchResults : filteredConversations).map((conversation) => (
               <ConversationRow
                 key={conversation.id}
                 user={conversation}
                 selected={conversation.id === activeConversationId}
-                onSelect={() => setActiveConversationId(conversation.id)}
+                onSelect={() => {
+                  const remoteUser = searchedUsers.find((user) => String(user._id) === String(conversation.id));
+                  if (remoteUser && !conversations.some((item) => String(item._id) === String(conversation.id))) {
+                    openDirectChat(remoteUser);
+                  } else {
+                    setActiveConversationId(conversation.id);
+                  }
+                }}
               />
             ))
           )}
@@ -150,6 +175,16 @@ function ChatSidebar({ width }) {
           <CallHistory />
         </Tabs.Panel>
       </Tabs>
+      <button
+        type="button"
+        onClick={() => setCreateGroupOpen(true)}
+        className="absolute bottom-4 right-4 z-20 grid size-12 place-items-center rounded-2xl bg-accent text-accent-foreground shadow-lg shadow-black/20 transition-transform hover:scale-105 active:scale-95"
+        aria-label="Create group"
+        title="Create group"
+      >
+        <PlusIcon className="size-6" strokeWidth={2.5} />
+      </button>
+      <CreateGroupModal isOpen={createGroupOpen} onClose={() => setCreateGroupOpen(false)} />
     </aside>
   );
 }
