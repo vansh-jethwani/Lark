@@ -8,6 +8,7 @@ import { useAuthStore } from "./store/useAuthStore";
 import { useEffect } from "react";
 
 import { Toaster } from "react-hot-toast";
+import { PushNotificationManager } from "./components/PushNotificationManager";
 
 function App() {
   const checkAuth = useAuthStore((state) => state.checkAuth);
@@ -21,7 +22,8 @@ function App() {
   if (isCheckingAuth) return <PageLoader />;
 
   return (
-    <ThemeProvider>
+      <ThemeProvider>
+        <PushNotificationManager enabled={Boolean(authUser)} />
         <Routes>
           <Route path="/" element={authUser ? <ChatPage /> : <Navigate to={"/auth"} replace />} />
           <Route

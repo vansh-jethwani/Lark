@@ -1,5 +1,5 @@
 ﻿import { Avatar, Button } from "@heroui/react";
-import { Maximize2Icon, MicIcon, MicOffIcon, PhoneIcon, PhoneIncomingIcon, PhoneOutgoingIcon, PhoneOffIcon, Trash2Icon, VideoIcon, VideoOffIcon, Volume2Icon, VolumeXIcon, XIcon, MinusIcon, RefreshCwIcon } from "lucide-react";
+import { ArrowDownLeftIcon, ArrowUpRightIcon, Maximize2Icon, MicIcon, MicOffIcon, PhoneIcon, PhoneIncomingIcon, PhoneOutgoingIcon, PhoneOffIcon, Trash2Icon, VideoIcon, VideoOffIcon, Volume2Icon, VolumeXIcon, XIcon, MinusIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppLogo } from "../AppLogo";
 import { getInitials } from "../../hooks/useSelectedConversation";
@@ -35,7 +35,7 @@ export function CallHistory() {
   const matchingUsers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
-    return users.filter((user) => !user.isAI && user.username?.toLowerCase().includes(query));
+    return users.filter((user) => user.username?.toLowerCase().includes(query));
   }, [searchQuery, users]);
   return <div className="mx-auto w-full max-w-2xl space-y-1 p-2 sm:p-3">
     {matchingUsers.length > 0 ? <div className="mb-2 border-b border-border pb-2"><p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">People</p>{matchingUsers.map((user) => <CallUserSearchRow key={user._id} user={user} />)}</div> : null}
@@ -85,13 +85,20 @@ function isUnsuccessful(entry) {
   return ["missed", "rejected", "cancelled", "failed"].includes(entry.status);
 }
 
-function CallTypeIcon({ entry }) {
-  const Icon = entry.type === "video" ? VideoIcon : PhoneIcon;
-  return <Icon className="size-3.5 shrink-0" />;
+function CombinedCallIcon({ entry, className = "" }) {
+  const TypeIcon = entry.type === "video" ? VideoIcon : PhoneIcon;
+  const DirectionIcon = entry.direction === "incoming" ? ArrowDownLeftIcon : ArrowUpRightIcon;
+
+  return <span className={`relative grid size-7 shrink-0 place-items-center rounded-full bg-current/10 ${className}`} aria-hidden="true">
+    <TypeIcon className="size-4" strokeWidth={2.25} />
+    <span className="absolute -bottom-0.5 -right-0.5 grid size-3.5 place-items-center rounded-full bg-background text-foreground ring-1 ring-border">
+      <DirectionIcon className="size-2.5" strokeWidth={3} />
+    </span>
+  </span>;
 }
 
 function callDescription(entry) {
-  return `${entry.direction === "incoming" ? "Incoming" : "Outgoing"} ${entry.type === "video" ? "video" : "audio"} call`;
+  return entry.type === "video" ? "Video call" : "Voice call";
 }
 
 function dateTimeLabel(value) {
@@ -132,7 +139,14 @@ function CallHistoryDetail({ entry, inChat = false, isSelectionMode = false, isS
   const clearHold = () => { if (holdTimer.current) window.clearTimeout(holdTimer.current); };
   const showMenu = (event) => { event.preventDefault(); if (inChat && isSelectionMode) { onToggleSelected?.(entry.id); return; } setMenuPosition({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 140) }); setMenuOpen(true); };
   const handleClick = () => { if (inChat && isSelectionMode) onToggleSelected?.(entry.id); };
-  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onClick={handleClick} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex max-w-[min(90%,28rem)] items-start gap-2 rounded-2xl px-3 py-2 text-xs shadow-sm ${inChat && entry.direction === "outgoing" ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "bg-danger/10" : "rounded-bl-md bg-surface"}`}><span className={unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}><CallDirectionIcon entry={entry} /></span><CallTypeIcon entry={entry} /><span className="min-w-0 flex-1"><span className={inChat && entry.direction === "outgoing" ? "text-accent-foreground" : "text-foreground"}>{callDescription(entry)}</span><span className={`block ${unsuccessful ? "text-danger" : inChat && entry.direction === "outgoing" ? "text-accent-foreground/80" : "text-muted"}`}>{status}{status === "Completed" && entry.duration ? ` · ${formatCallDuration(entry.duration)}` : ""} · {timeLabel(entry.createdAt)}</span></span>{selected && !inChat ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
+  const outgoing = inChat && entry.direction === "outgoing";
+  const iconTone = unsuccessful ? "text-danger" : outgoing ? "text-accent-foreground" : "text-foreground";
+  const detailTone = unsuccessful ? "text-danger" : outgoing ? "text-accent-foreground/85" : "text-muted";
+  const hasDuration = status === "Completed" && entry.duration;
+  const metadataLabel = hasDuration ? "Duration" : status;
+  const metadataValue = hasDuration ? formatCallDuration(entry.duration) : null;
+
+  return <div className={`relative flex w-full py-0.5 ${inChat ? (entry.direction === "outgoing" ? "justify-end" : "justify-start") : "justify-center"} ${selected ? "rounded-xl bg-accent/10" : ""}`} onClick={handleClick} onPointerDown={startHold} onPointerUp={clearHold} onPointerLeave={clearHold} onContextMenu={showMenu}><div className={`flex w-fit max-w-[min(90%,28rem)] items-start gap-2.5 rounded-2xl px-3 py-2.5 text-xs shadow-sm sm:max-w-[min(75%,28rem)] ${outgoing ? "rounded-br-md bg-accent text-accent-foreground" : unsuccessful ? "rounded-bl-md bg-danger/10" : "rounded-bl-md bg-surface"}`}><CombinedCallIcon entry={entry} className={iconTone} /><span className="min-w-0"><span className={`block break-words text-[13px] font-semibold leading-5 ${outgoing ? "text-accent-foreground" : "text-foreground"}`}>{callDescription(entry)}</span><span className={`mt-1 flex min-w-[9.5rem] items-baseline justify-between gap-4 tabular-nums ${detailTone}`}><span className="min-w-0"><span className="font-medium">{metadataLabel}</span>{metadataValue ? <span className="ml-1.5 font-semibold">{metadataValue}</span> : null}</span><time className="shrink-0 text-[11px]" dateTime={entry.createdAt}>{timeLabel(entry.createdAt)}</time></span></span>{selected && !inChat ? <button type="button" aria-label="Delete selected call" title="Delete call" onClick={remove} className="text-danger hover:text-danger/80"><Trash2Icon className="size-3.5" /></button> : null}</div>{menuOpen ? <CallLogContextMenu position={menuPosition} onClose={() => setMenuOpen(false)} onSelect={selectFromHold} onDelete={remove} /> : null}</div>;
 }
 
 function CallLogContextMenu({ position, onClose, onSelect, onDelete }) {
@@ -223,8 +237,9 @@ export function CallPanel() {
     const accepted = async ({ userId, callId }) => { if (callRef.current?.id !== callId || String(callRef.current.peer.id) !== String(userId)) return; setCurrentCall({ ...callRef.current, status: "connecting" }); const connection = peerRef.current || createPeer(callRef.current.peer); const offer = await connection.createOffer(); await connection.setLocalDescription(offer); socket.emit("call:signal", { receiverId: userId, callId, signal: { description: connection.localDescription } }); };
     const signal = async ({ userId, callId, signal: payload }) => { if (callRef.current?.id !== callId) return; const connection = peerRef.current || createPeer(callRef.current.peer); try { if (payload.candidate) { if (connection.remoteDescription) await connection.addIceCandidate(payload.candidate); else candidateQueueRef.current.push(payload.candidate); return; } if (!payload.description) return; await connection.setRemoteDescription(payload.description); await flushCandidates(connection); if (payload.description.type === "offer") { const answer = await connection.createAnswer(); await connection.setLocalDescription(answer); socket.emit("call:signal", { receiverId: userId, callId, signal: { description: connection.localDescription } }); setCurrentCall({ ...callRef.current, status: "connecting", incoming: false }); } } catch (error) { debug("signaling error", error); setStatusText("The call connection could not be established."); } };
     const rejected = ({ callId }) => { if (callRef.current?.id === callId) finish("rejected"); }; const ended = ({ callId }) => { if (callRef.current?.id === callId) finish("completed"); };
-    socket.on("call:ring", invite); socket.on("call:ringing", ringing); socket.on("call:accept", accepted); socket.on("call:reject", rejected); socket.on("call:end", ended); socket.on("call:signal", signal);
-    return () => { socket.off("call:ring", invite); socket.off("call:ringing", ringing); socket.off("call:accept", accepted); socket.off("call:reject", rejected); socket.off("call:end", ended); socket.off("call:signal", signal); };
+    const failed = ({ callId, message }) => { if (callRef.current?.id === callId) { setStatusText(message || "This call is no longer available."); finish("failed"); } };
+    socket.on("call:ring", invite); socket.on("call:ringing", ringing); socket.on("call:accept", accepted); socket.on("call:reject", rejected); socket.on("call:end", ended); socket.on("call:signal", signal); socket.on("call:failed", failed);
+    return () => { socket.off("call:ring", invite); socket.off("call:ringing", ringing); socket.off("call:accept", accepted); socket.off("call:reject", rejected); socket.off("call:end", ended); socket.off("call:signal", signal); socket.off("call:failed", failed); };
   // Handlers intentionally use ref-backed call state and stable media helpers.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, users]);
@@ -232,6 +247,31 @@ export function CallPanel() {
   useEffect(() => { if (call?.status !== "calling" && call?.status !== "ringing") return undefined; const audio = ringAudioRef.current; audio?.play().catch(() => {}); return () => { if (audio) { audio.pause(); audio.currentTime = 0; } }; }, [call?.status]);
   useEffect(() => { if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current; }, [call]);
   const accept = async () => { try { localStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints(call.type)); createPeer(call.peer); socket.emit("call:accept", { receiverId: call.peer.id, callId: call.id }); setCurrentCall({ ...callRef.current, status: "connecting", incoming: false }); } catch (error) { showMediaError(error); } };
+  useEffect(() => {
+    const handleNotificationAction = async ({ detail }) => {
+      const { action, call: pendingCall } = detail || {};
+      window.__larkPendingCallAction = null;
+      if (!pendingCall || callRef.current || !socket) return;
+      const peer = { id: pendingCall.caller._id, name: pendingCall.caller.fullName, avatar: pendingCall.caller.profilePic, initials: getInitials(pendingCall.caller.fullName) };
+      if (action === "decline") { socket.emit("call:reject", { receiverId: peer.id, callId: pendingCall.callId }); return; }
+      if (action !== "accept") return;
+      try {
+        localStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints(pendingCall.callType));
+        setCurrentCall({ id: pendingCall.callId, peer, type: pendingCall.callType, status: "connecting", incoming: false });
+        createPeer(peer);
+        socket.emit("call:accept", { receiverId: peer.id, callId: pendingCall.callId });
+      } catch (error) { showMediaError(error); }
+    };
+    window.addEventListener("lark:notification-call-action", handleNotificationAction);
+    if (window.__larkPendingCallAction) {
+      const pendingAction = window.__larkPendingCallAction;
+      window.__larkPendingCallAction = null;
+      handleNotificationAction({ detail: pendingAction });
+    }
+    return () => window.removeEventListener("lark:notification-call-action", handleNotificationAction);
+  // Call actions deliberately use ref-backed state and existing signaling helpers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
   const end = (status = "completed") => { if (callRef.current) socket?.emit("call:end", { receiverId: callRef.current.peer.id, callId: callRef.current.id }); finish(status); };
   const toggleMute = () => { const next = !muted; localStreamRef.current?.getAudioTracks().forEach((track) => { track.enabled = !next; }); setMuted(next); };
   const toggleCamera = () => { const next = !cameraOff; localStreamRef.current?.getVideoTracks().forEach((track) => { track.enabled = !next; }); setCameraOff(next); };

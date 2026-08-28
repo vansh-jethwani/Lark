@@ -87,10 +87,8 @@ export function MessageBubble({
   const statusLabel = message.readAt ? "Read" : message.deliveredAt ? "Delivered" : "Sent";
   const StatusIcon = message.deliveredAt || message.readAt ? CheckCheckIcon : CheckIcon;
   const statusIconClassName = message.readAt
-    ? "text-blue-700"
-    : message.deliveredAt
-      ? "text-slate-700"
-      : "text-slate-600";
+    ? "message-receipt--read"
+    : "message-receipt--sent";
 
   const { deleteMessage, togglePinMessage, setEditingMessage, toggleReaction } = useChatStore();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -375,7 +373,7 @@ export function MessageBubble({
 
             {isOwnMessage && (
               <StatusIcon
-                className={`size-3.5 ${statusIconClassName}`}
+                className={`size-3.5 shrink-0 stroke-[2.5] ${statusIconClassName}`}
                 aria-label={statusLabel}
               />
             )}

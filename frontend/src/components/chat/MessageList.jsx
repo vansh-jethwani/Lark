@@ -5,7 +5,6 @@ import useScrollToBottom from "../../hooks/useScrollToBottom";
 import { MessageBubble } from "./MessageBubble";
 import { NoConversationPlaceholder } from "./NoConversationPlaceholder";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
-import { AI_USER_ID } from "../../data/aiUser";
 import { TypingIndicator } from "./TypingIndicator";
 import { useChatStore } from "../../store/useChatStore";
 import { PinnedMessageBanner } from "./PinnedMessageBanner";
@@ -34,7 +33,6 @@ export function MessageList() {
   const [forwardModalOpen, setForwardModalOpen] = useState(false);
   const highlightTimeoutRef = useRef(null);
 
-  const isAIThinking = useChatStore((state) => state.isAIThinking);
   const typingUsers = useChatStore((state) => state.typingUsers);
   const deleteMessages = useChatStore((state) => state.deleteMessages);
   const messageSearchQuery = useChatStore((state) => state.messageSearchQuery);
@@ -290,11 +288,7 @@ export function MessageList() {
             );
           })}
 
-          {activeConversationId === AI_USER_ID && isAIThinking ? (
-            <TypingIndicator label="Lark AI is thinking" />
-          ) : null}
-
-          {activeConversationId !== AI_USER_ID && typingUsers?.[activeConversationId] ? (
+          {typingUsers?.[activeConversationId] ? (
             <TypingIndicator label="Typing" />
           ) : null}
 

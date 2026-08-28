@@ -2,7 +2,6 @@ import { useMediaQuery } from "./useMediaQuery";
 import { formatMessageTime } from "../lib/utils";
 import { useChatStore } from "../store/useChatStore";
 import { useAuthStore } from "../store/useAuthStore";
-import { AI_USER, AI_USER_ID } from "../data/aiUser";
 
 // John Doe -> JD
 export function getInitials(name) {
@@ -67,9 +66,9 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
     peer: {
       name: user.fullName,
       subtitle: user.email,
-      isOnline: user.isAI ? true : onlineUsers.includes(user._id),
+      isOnline: onlineUsers.includes(user._id),
       avatarUrl: user.profilePic,
-      initials: user.isAI ? "AI" : getInitials(user.fullName),
+      initials: getInitials(user.fullName),
     },
     messages: mappedMessages,
   };
@@ -87,10 +86,8 @@ export function useSelectedConversation() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const selectedUser = activeConversationId
-    ? activeConversationId === AI_USER_ID
-      ? AI_USER
-      : users.find((user) => user._id === activeConversationId) ||
-        conversations.find((user) => user._id === activeConversationId)
+    ? users.find((user) => user._id === activeConversationId) ||
+      conversations.find((user) => user._id === activeConversationId)
     : null;
 
   const activeConversation = selectedUser

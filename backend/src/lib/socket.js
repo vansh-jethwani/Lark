@@ -3,6 +3,8 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import Call from "../models/call.model.js";
+import User from "../models/user.model.js";
+import { sendIncomingCallNotification } from "./notifications.js";
 const app = express();
 const server = http.createServer(app);
 const configuredFrontendURL = process.env.FRONTEND_URL || process.env.CLIENT_URL;
@@ -63,6 +65,10 @@ io.on("connection", (socket) => {
       try {
         await Call.create({ callId, caller: userId, receiver: receiverId, type: callType, status: "ringing" });
         relayCall("call:ring", receiverId, { ...payload, callId, callType, callerId: userId });
+        if (getReceiverSocketId(receiverId).length === 0) {
+          const caller = await User.findById(userId).select("fullName profilePic");
+          if (caller) sendIncomingCallNotification({ receiverId, caller, callId, callType }).catch((error) => console.error("Call push failed:", error.message));
+        }
       } catch (error) {
         console.error("Call initiation failed:", error.message);
         socket.emit("call:failed", { callId });
@@ -70,7 +76,8 @@ io.on("connection", (socket) => {
     });
     socket.on("call:ringing", ({ receiverId, ...payload }) => relayCall("call:ringing", receiverId, { ...payload, userId }));
     socket.on("call:accept", async ({ receiverId, callId, ...payload }) => {
-      await Call.findOneAndUpdate({ callId, receiver: userId }, { status: "accepted", answeredAt: new Date() });
+      const call = await Call.findOneAndUpdate({ callId, receiver: userId, caller: receiverId, status: "ringing" }, { status: "accepted", answeredAt: new Date() });
+      if (!call) return socket.emit("call:failed", { callId, message: "This call is no longer available." });
       relayCall("call:accept", receiverId, { ...payload, callId, userId });
     });
     socket.on("call:reject", async ({ receiverId, callId, ...payload }) => {

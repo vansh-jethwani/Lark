@@ -8,12 +8,11 @@
 ![Express](https://img.shields.io/badge/Express.js-Backend-000000?style=for-the-badge&logo=express)
 ![Socket.IO](https://img.shields.io/badge/Socket.IO-Realtime-010101?style=for-the-badge&logo=socket.io)
 ![JWT](https://img.shields.io/badge/Auth-JWT-orange?style=for-the-badge)
-![Gemini](https://img.shields.io/badge/AI-Google_Gemini-4285F4?style=for-the-badge&logo=google)
 ![ImageKit](https://img.shields.io/badge/ImageKit-Media-0F8BFF?style=for-the-badge)
 
 <h2>Lark</h2>
 
-A Modern Full-Stack Real-Time Messaging Platform inspired by **WhatsApp**, **Telegram**, and **Messenger**, featuring an integrated **Gemini AI Assistant**.
+A modern full-stack, real-time, human-to-human messaging platform inspired by **WhatsApp**, **Telegram**, and **Messenger**.
 
 </div>
 
@@ -21,7 +20,7 @@ A Modern Full-Stack Real-Time Messaging Platform inspired by **WhatsApp**, **Tel
 
 # 📖 About
 
-Lark is a modern full-stack messaging application built with the **MERN Stack**. It offers secure authentication, real-time communication, AI-powered conversations, cloud-based media sharing, and a responsive user experience.
+Lark is a modern full-stack messaging application built with the **MERN Stack**. It offers secure authentication, real-time communication, cloud-based media sharing, and a responsive user experience.
 
 The application is designed with a scalable architecture by separating the frontend and backend, making it suitable for production-ready deployment.
 
@@ -63,7 +62,6 @@ The application is designed with a scalable architecture by separating the front
 
 - 🔐 JWT Authentication with Email OTP Verification
 - 💬 Real-Time One-to-One Messaging
-- 🤖 Google Gemini AI Assistant
 - 📷 Image, Video, Audio & Document Sharing
 - ☁️ ImageKit Cloud Storage
 - 😀 Emoji Reactions
@@ -107,7 +105,6 @@ The application is designed with a scalable architecture by separating the front
 - Socket.IO
 - Multer
 - ImageKit SDK
-- Google Gemini API
 - node-cron
 
 ---
@@ -157,7 +154,6 @@ Lark/
 Lark combines the best features of modern messaging platforms into a single application.
 
 - ⚡ Instant real-time messaging using Socket.IO
-- 🤖 Integrated AI assistant powered by Gemini
 - 📁 Secure cloud media storage with ImageKit
 - 🔐 JWT Authentication with Email OTP
 - 🎨 Beautiful and responsive UI
@@ -215,7 +211,10 @@ IMAGEKIT_PUBLIC_KEY=your_public_key
 IMAGEKIT_PRIVATE_KEY=your_private_key
 IMAGEKIT_URL_ENDPOINT=your_url_endpoint
 
-GEMINI_API_KEY=your_gemini_api_key
+# Web Push (generate with: npx web-push generate-vapid-keys)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:you@example.com
 
 NODE_ENV=development
 ```
@@ -287,7 +286,6 @@ docker run -p 3000:3000 --env-file backend/.env lark
 | Backend | Render |
 | Database | MongoDB Atlas |
 | Media Storage | ImageKit |
-| AI | Google Gemini API |
 
 ---
 
@@ -325,7 +323,6 @@ Planned features for future releases:
 - 🔍 Message Search
 - ⭐ Starred Messages
 - 🔐 End-to-End Encryption
-- 🤖 AI Image Generation
 
 ---
 

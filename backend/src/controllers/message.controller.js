@@ -2,6 +2,7 @@ import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
+import { sendMessageNotification } from "../lib/notifications.js";
 
 const MESSAGE_POPULATE = "text image video audio file fileName senderId";
 
@@ -247,6 +248,11 @@ export async function sendMessage(req, res) {
             io.to(messageSocketIds).emit("newMessage", populatedMessage);
         }
 
+        if (receiverSocketId.length === 0) {
+            const sender = await User.findById(senderId).select("fullName profilePic");
+            if (sender) sendMessageNotification({ receiverId, sender, message: populatedMessage }).catch((error) => console.error("Message push failed:", error.message));
+        }
+
         res.status(201).json(populatedMessage);
 
     } catch (error) {
@@ -330,6 +336,7 @@ export async function forwardMessage(req, res) {
         }
 
         const forwardedMessages = [];
+        const senderForNotification = await User.findById(senderId).select("fullName profilePic");
 
         for (const targetReceiverId of targetReceiverIds) {
             const receiverSocketIds = getReceiverSocketId(targetReceiverId);
@@ -359,6 +366,10 @@ export async function forwardMessage(req, res) {
 
             if (socketIds.length > 0) {
                 io.to(socketIds).emit("newMessage", populatedMessage);
+            }
+
+            if (receiverSocketIds.length === 0 && senderForNotification) {
+                sendMessageNotification({ receiverId: targetReceiverId, sender: senderForNotification, message: populatedMessage }).catch((error) => console.error("Forwarded-message push failed:", error.message));
             }
 
             forwardedMessages.push(populatedMessage);

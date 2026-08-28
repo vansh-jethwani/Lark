@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Avatar } from "@heroui/react";
 import { CheckIcon, Forward, X } from "lucide-react";
 
-import { AI_USER_ID } from "../../data/aiUser";
 import { getInitials } from "../../hooks/useSelectedConversation";
 import { useAuthStore } from "../../store/useAuthStore";
 import { useChatStore } from "../../store/useChatStore";
@@ -13,8 +12,6 @@ function uniqueRecipients(users, conversations, authUserId) {
   [...users, ...conversations].forEach((user) => {
     if (!user?._id) return;
     if (String(user._id) === String(authUserId)) return;
-    if (String(user._id) === String(AI_USER_ID) || user.isAI) return;
-
     recipients.set(user._id, user);
   });
 

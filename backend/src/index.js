@@ -12,8 +12,8 @@ import Message from "./models/message.model.js";
 import job from "./lib/cron.js";
 import authRoutes from "./routes/auth.routes.js";
 import messageRoutes from "./routes/message.routes.js";
+import notificationRoutes from "./routes/notification.routes.js";
 import {app, server} from "./lib/socket.js"
-import aiRoutes from "./routes/ai.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 
 dotenv.config();
@@ -45,7 +45,7 @@ app.get("/ping", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
-app.use("/api/ai", aiRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/profile", profileRoutes);
 
 // if the public directory exists, serve the static files

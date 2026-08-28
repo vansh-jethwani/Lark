@@ -2,6 +2,27 @@
 @import "@heroui/styles";
 @import "./styles/heroui-theme-presets.css";
 
+/* Receipts sit on an accent bubble, so their contrast cannot rely on the page foreground. */
+:root {
+  --message-receipt-read: oklch(0.36 0.17 255);
+  --message-receipt-shadow: rgb(255 255 255 / 0.3);
+}
+
+[data-theme="dark"] {
+  --message-receipt-read: oklch(0.3 0.16 255);
+  --message-receipt-shadow: rgb(255 255 255 / 0.22);
+}
+
+.message-receipt--sent {
+  color: white;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.32));
+}
+
+.message-receipt--read {
+  color: var(--message-receipt-read);
+  filter: drop-shadow(0 1px 1px var(--message-receipt-shadow));
+}
+
 /* HeroUI's dark fallback uses prefers-color-scheme but forgot [data-theme="light"], so OS dark +
    app light still applied dark: utilities. Re-define so explicit light theme wins system dark. */
 @custom-variant dark {

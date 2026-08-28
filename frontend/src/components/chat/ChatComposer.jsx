@@ -3,7 +3,6 @@ import { MicIcon, PaperclipIcon, LoaderIcon, SendHorizontalIcon, SquareIcon } fr
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
-import { AI_USER_ID } from "../../data/aiUser";
 import { ReplyPreview } from "./ReplyPreview";
 import { EditPreview } from "./EditPreview";
 import { MediaSendPreviewModal } from "./MediaSendPreviewModal";
@@ -15,7 +14,6 @@ export function ChatComposer() {
   const isSendingMedia = useChatStore((state) => state.isSendingMedia);
   const sendTextMessage = useChatStore((state) => state.sendTextMessage);
   const setComposerText = useChatStore((state) => state.setComposerText);
-  const sendAIMessage = useChatStore((state) => state.sendAIMessage);
   const { activeConversationId } = useSelectedConversation();
   const editingMessage = useChatStore((state) => state.editingMessage);
   const clearEditingMessage = useChatStore((state) => state.clearEditingMessage);
@@ -42,40 +40,32 @@ export function ChatComposer() {
     resizeComposer();
   }, [composerText, replyingTo]);
 
-  const handleSend = async () => {
-    if (activeConversationId !== AI_USER_ID) {
-      sendTypingStatus(activeConversationId, false);
-    }
-    if (activeConversationId === AI_USER_ID) {
-      await sendAIMessage();
-      return;
-    }
+  useEffect(() => {
+    const focusComposer = () => textAreaRef.current?.focus();
+    window.addEventListener("lark:focus-composer", focusComposer);
+    return () => window.removeEventListener("lark:focus-composer", focusComposer);
+  }, []);
 
+  const handleSend = async () => {
+    sendTypingStatus(activeConversationId, false);
     await sendTextMessage(activeConversationId);
   };
 
   const handleComposerTextChange = (event) => {
     setComposerText(event.target.value);
-    if (activeConversationId !== AI_USER_ID) {
-      sendTypingStatus(activeConversationId, true);
+    sendTypingStatus(activeConversationId, true);
 
-      clearTimeout(typingTimeoutRef.current);
+    clearTimeout(typingTimeoutRef.current);
 
-      typingTimeoutRef.current = setTimeout(() => {
-        sendTypingStatus(activeConversationId, false);
-      }, 1200);
-    }
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTypingStatus(activeConversationId, false);
+    }, 1200);
   };
 
   const handleMediaPick = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-
-    if (activeConversationId === AI_USER_ID) {
-      await sendAIMessage({ file });
-      return;
-    }
 
     setPendingMediaFile(file);
   };
@@ -97,7 +87,7 @@ export function ChatComposer() {
       return;
     }
 
-    if (!navigator.mediaDevices?.getUserMedia || activeConversationId === AI_USER_ID) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const recorder = new MediaRecorder(stream);
@@ -186,7 +176,7 @@ export function ChatComposer() {
           <Button
             variant={isRecordingVoice ? "primary" : "ghost"}
             isIconOnly
-            isDisabled={activeConversationId === AI_USER_ID || isSendingMedia}
+            isDisabled={isSendingMedia}
             className="mb-1 size-10 shrink-0 self-end rounded-full"
             onPress={handleVoiceRecord}
           >

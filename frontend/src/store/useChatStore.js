@@ -5,7 +5,6 @@ import { axiosInstance } from "../lib/axios";
 import { useAuthStore } from "./useAuthStore";
 import toast from "react-hot-toast";
 
-import { AI_USER, AI_USER_ID } from "../data/aiUser";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const getMessagePartnerId = (message, authUserId) =>
@@ -67,7 +66,6 @@ export const useChatStore = create(
       replyingTo: null,
       editingMessage: null,
       isSendingMedia: false,
-      isAIThinking: false,
       typingUsers: {},
 
       getUsers: async () => {
@@ -102,38 +100,6 @@ export const useChatStore = create(
       },
 
       getMessages: async (userId) => {
-        if (userId === AI_USER_ID) {
-          set({ isMessagesLoading: true }); // do not clear messages here
-
-          try {
-            const res = await axiosInstance.get("/ai/messages");
-            const authUser = useAuthStore.getState().authUser;
-
-            const aiMessages = asArray(res.data).map((msg) => ({
-              _id: msg._id,
-              senderId: msg.role === "user" ? authUser._id : AI_USER_ID,
-              receiverId: msg.role === "user" ? AI_USER_ID : authUser._id,
-              text: msg.text,
-              image: msg.fileType?.startsWith("image/") ? msg.file : "",
-              audio: msg.fileType?.startsWith("audio/") ? msg.file : "",
-              file: !msg.fileType?.startsWith("image/") ? msg.file : "",
-              fileName: msg.fileName,
-              fileType: msg.fileType,
-              fileSize: msg.fileSize,
-              createdAt: msg.createdAt,
-            }));
-
-            set({ messages: aiMessages });
-          } catch (error) {
-            toast.error(error.response?.data?.message || "Failed to load AI messages");
-            // do not set messages: [] here
-          } finally {
-            set({ isMessagesLoading: false });
-          }
-
-          return;
-        }
-
         set({ isMessagesLoading: true, messages: [] });
         try {
           const res = await axiosInstance.get(`/messages/${userId}`);
@@ -199,94 +165,6 @@ export const useChatStore = create(
           return true;
         } catch (error) {
           toast.error(error.response?.data?.message || "Failed to send message");
-          return false;
-        }
-      },
-
-      sendAIMessage: async ({ file } = {}) => {
-        const messageText = get().composerText.trim();
-        const authUser = useAuthStore.getState().authUser;
-
-        if (!messageText && !file) return false;
-        if (!authUser?._id) return false;
-
-        const tempId = `temp-ai-${Date.now()}`;
-        const isImage = file?.type?.startsWith("image/");
-
-        const tempUserMessage = {
-          _id: tempId,
-          senderId: authUser._id,
-          receiverId: AI_USER_ID,
-          text: messageText,
-            image: isImage ? URL.createObjectURL(file) : "",
-            audio: file?.type?.startsWith("audio/") ? URL.createObjectURL(file) : "",
-            file: !isImage && file ? "#" : "",
-          fileName: file?.name || "",
-          fileType: file?.type || "",
-          fileSize: file?.size || 0,
-          createdAt: new Date().toISOString(),
-        };
-
-        set((state) => ({
-          messages: [...asArray(state.messages), tempUserMessage],
-          composerText: "",
-          isAIThinking: true,
-        }));
-
-        try {
-          const formData = new FormData();
-          formData.append("message", messageText);
-          if (file) formData.append("file", file);
-
-          const res = await axiosInstance.post("/ai/chat", formData);
-
-          const { userMessage, aiMessage } = res.data;
-
-          const mappedUserMessage = {
-            _id: userMessage._id,
-            senderId: authUser._id,
-            receiverId: AI_USER_ID,
-            text: userMessage.text,
-            image: userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
-            audio: userMessage.fileType?.startsWith("audio/") ? userMessage.file : "",
-            file: !userMessage.fileType?.startsWith("image/") ? userMessage.file : "",
-            fileName: userMessage.fileName,
-            fileType: userMessage.fileType,
-            fileSize: userMessage.fileSize,
-            createdAt: userMessage.createdAt,
-          };
-
-          const mappedAIMessage = {
-            _id: aiMessage._id,
-            senderId: AI_USER_ID,
-            receiverId: authUser._id,
-            text: aiMessage.text,
-            createdAt: aiMessage.createdAt,
-          };
-
-          set((state) => ({
-            messages: [
-              ...asArray(state.messages).filter((msg) => msg._id !== tempId),
-              mappedUserMessage,
-              mappedAIMessage,
-            ],
-            conversations: upsertConversation(
-              state.conversations,
-              AI_USER,
-              mappedAIMessage,
-              0
-            ),
-            isAIThinking: false,
-          }));
-
-          return true;
-        } catch (error) {
-          set({ isAIThinking: false });
-
-          toast.error(
-            error.response?.data?.message || "Failed to get AI response"
-          );
-
           return false;
         }
       },
@@ -628,9 +506,7 @@ export const useChatStore = create(
       setActiveConversationId: (activeConversationId) => {
         set((state) => {
           const selectedUser =
-            activeConversationId === AI_USER_ID
-              ? AI_USER
-              : state.users.find((user) => user._id === activeConversationId) ||
+            state.users.find((user) => user._id === activeConversationId) ||
               state.conversations.find((user) => user._id === activeConversationId) ||
               null;
 
@@ -712,7 +588,7 @@ export const useChatStore = create(
 
       sendTypingStatus: (receiverId, isTyping) => {
         const socket = useAuthStore.getState().socket;
-        if (!socket || !receiverId || receiverId === AI_USER_ID) return;
+        if (!socket || !receiverId) return;
 
         socket.emit("typing", { receiverId, isTyping });
       },

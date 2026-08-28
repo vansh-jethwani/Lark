@@ -3,8 +3,6 @@ import { useAuthStore } from "../../store/useAuthStore";
 import { useChatStore } from "../../store/useChatStore";
 import { APP_NAME, AppLogo } from "../AppLogo";
 import { Avatar } from "@heroui/react";
-import {Tooltip} from "@heroui/react";
-import { AI_USER, AI_USER_ID } from "../../data/aiUser";
 
 import { SearchField, Tabs } from "@heroui/react";
 import { MessageSquareIcon, PhoneIcon } from "lucide-react";
@@ -62,24 +60,10 @@ function ChatSidebar({ width }) {
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
-  const conversationUsers = [
-    {
-      ...AI_USER,
-      lastMessage: conversations.find((c) => c._id === AI_USER_ID)?.lastMessage,
-      lastMessageAt: conversations.find((c) => c._id === AI_USER_ID)?.lastMessageAt,
-      unreadCount: conversations.find((c) => c._id === AI_USER_ID)?.unreadCount || 0,
-    },
-    ...conversations.filter(
-      (conversation) =>
-        conversation._id !== AI_USER_ID &&
-        conversation.username !== "lark-ai" &&
-        conversation.email !== "ai@lark.app" &&
-        conversation.isAI !== true
-    ),
-  ].map((user) => mapUserForList(user, onlineUsers));
+  const conversationUsers = conversations.map((user) => mapUserForList(user, onlineUsers));
   const filteredConversations = normalizedSearchQuery
     ? users
-      .filter((user) => !user.isAI && user.username?.toLowerCase().includes(normalizedSearchQuery))
+      .filter((user) => user.username?.toLowerCase().includes(normalizedSearchQuery))
       .map((user) => mapUserForList(user, onlineUsers))
     : conversationUsers;
 
@@ -91,22 +75,7 @@ function ChatSidebar({ width }) {
     >
       <div className="shrink-0 border-b border-border px-2 pb-2 pt-2.5 sm:px-3 sm:pt-3">
         <div className="flex items-center gap-3 px-0.5 sm:gap-3 sm:px-1">
-          <Tooltip content="Lark AI">
-          <button
-            onClick={() => {
-              setSidebarTab("chats");
-              setSearchQuery("");
-              setActiveConversationId(AI_USER_ID);
-            }}
-            className="rounded-lg transition-transform hover:scale-105 active:scale-95"
-          >
-            <AppLogo
-              size={34}
-              className="size-9 shrink-0 rounded-lg"
-              alt="Lark AI"
-            />
-          </button>
-          </Tooltip>
+          <AppLogo size={34} className="size-9 shrink-0 rounded-lg" alt={APP_NAME} />
 
           <p className="flex-1 truncate text-lg font-bold tracking-tight sm:text-[22px]">
             {APP_NAME}
