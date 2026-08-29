@@ -3,10 +3,11 @@ import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
+import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
 
 const populate = (query) =>
   query
-    .populate("members", "fullName username profilePic email")
+    .populate("members", "fullName username profilePic")
     .populate("admins", "_id fullName username profilePic")
     .populate("createdBy", "_id fullName username profilePic")
     .lean();
@@ -24,7 +25,7 @@ function sanitizeGroup(group) {
   return {
     _id: group._id,
     name: group.name,
-    profilePic: group.profilePic,
+    profilePic: presentMessageMedia({ image: group.profilePic }).image,
     description: group.description,
     members: group.members,
     admins: group.admins,
@@ -77,8 +78,8 @@ export async function getGroupMessages(req, res) {
     const filter = { groupId: group._id, deletedFor: { $nin: [req.userId] } };
     if (req.query.paginated !== "true") {
       const messages = await Message.find(filter).populate("senderId", "fullName username profilePic")
-        .populate("replyTo", "text image video audio file fileName senderId").sort({ createdAt: 1 });
-      return res.json(messages);
+        .populate("replyTo", "text image video audio file fileName senderId").sort({ createdAt: 1 }).limit(100);
+      return res.json(presentMessagesMedia(messages));
     }
     const { limit, before } = getPageOptions(req);
     if (before) filter.$and = [{ $or: [{ createdAt: { $lt: before.createdAt } }, { createdAt: before.createdAt, _id: { $lt: before.id } }] }];
@@ -86,7 +87,7 @@ export async function getGroupMessages(req, res) {
       .populate("replyTo", "text image video audio file fileName senderId").sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
     const hasMore = page.length > limit;
     const messages = (hasMore ? page.slice(0, limit) : page).reverse();
-    res.json({ messages, hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
+    res.json({ messages: presentMessagesMedia(messages), hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
   } catch (error) {
     console.log("Error in getGroupMessages:", error.message);
     res.status(500).json({ message: "Internal server error" });
@@ -106,18 +107,18 @@ export async function sendGroupMessage(req, res) {
     let media = {};
     if (mediaFile) {
       if (!hasImagekitConfig()) return res.status(503).json({ message: "Media upload is not configured." });
-      const url = await uploadChatMedia(mediaFile);
+      const { filePath, fileId } = await uploadChatMedia(mediaFile);
       const kind = mediaFile.mimetype.startsWith("image") ? "image" : mediaFile.mimetype.startsWith("video") ? "video" : mediaFile.mimetype.startsWith("audio") ? "audio" : "file";
-      media = { [kind]: url, fileName: mediaFile.originalname, fileType: mediaFile.mimetype, fileSize: mediaFile.size };
+      media = { [kind]: filePath, [`${kind}FileId`]: fileId, fileName: mediaFile.originalname, fileType: mediaFile.mimetype, fileSize: mediaFile.size };
     }
     const message = await Message.create({ senderId: req.userId, groupId: group._id, text, replyTo: req.body.replyTo || null, ...media });
     const populated = await Message.findById(message._id)
       .populate("senderId", "fullName username profilePic")
       .populate("replyTo", "text image video audio file fileName senderId");
     const sockets = groupSocketIds(group);
-    if (sockets.length) io.to(sockets).emit("newMessage", populated);
+    if (sockets.length) io.to(sockets).emit("newMessage", presentMessageMedia(populated));
     await Group.updateOne({ _id: group._id }, { $set: { updatedAt: new Date() } });
-    res.status(201).json(populated);
+    res.status(201).json(presentMessageMedia(populated));
   } catch (error) {
     console.log("Error in sendGroupMessage:", error.message);
     res.status(500).json({ message: "Failed to send group message." });
@@ -130,7 +131,7 @@ export async function getGroupMedia(req, res) {
     if (!group) return res.status(404).json({ message: "Group not found." });
     const messages = await Message.find({ groupId: group._id, deletedFor: { $nin: [req.userId] }, $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }] })
       .select("image video audio file fileName fileType fileSize senderId createdAt").sort({ createdAt: -1 }).limit(60);
-    res.json(messages);
+    res.json(presentMessagesMedia(messages));
   } catch (error) { res.status(500).json({ message: "Internal server error" }); }
 }
 

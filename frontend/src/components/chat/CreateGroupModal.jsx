@@ -88,7 +88,7 @@ export function CreateGroupModal({ isOpen, onClose }) {
         );
         const uploadData = await uploadRes.json();
         if (!uploadRes.ok) throw new Error(uploadData.message || "Upload failed");
-        profilePic = uploadData.url;
+        profilePic = uploadData.filePath || uploadData.url;
       }
 
       const group = await createGroup({

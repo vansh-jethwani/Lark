@@ -2,6 +2,7 @@ import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 import Group from "../models/group.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
+import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { sendMessageNotification } from "../lib/notifications.js";
 
@@ -45,48 +46,116 @@ async function populateReply(messageId) {
     return Message.findById(messageId).populate("replyTo", MESSAGE_POPULATE);
 }
 
+function presentMessage(message) {
+    return presentMessageMedia(message);
+}
+
 export async function getSharedMedia(req, res) {
     try {
         const userId = req.userId;
         const peerId = req.params.id;
         const messages = await Message.find({
-            $or: [{ senderId: userId, receiverId: peerId }, { senderId: peerId, receiverId: userId }],
+            $and: [
+                { $or: [{ senderId: userId, receiverId: peerId }, { senderId: peerId, receiverId: userId }] },
+                { $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }] },
+            ],
             deletedFor: { $nin: [userId] },
-            $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }],
         }).select("image video audio file fileName fileType fileSize senderId createdAt").sort({ createdAt: -1 }).limit(60);
-        res.json(messages);
+        res.json(presentMessagesMedia(messages));
     } catch (error) { res.status(500).json({ message: "Internal server error" }); }
+}
+
+export async function getFreshMediaUrl(req, res) {
+    try {
+        const message = await Message.findById(req.params.id);
+        const type = req.params.type;
+        if (!message || !["image", "video", "audio", "file"].includes(type)) {
+            return res.status(404).json({ message: "Media not found." });
+        }
+        if (!(await isMessageParticipant(message, req.userId))) {
+            return res.status(403).json({ message: "Not allowed." });
+        }
+        const presented = presentMessage(message);
+        const url = type === "image" ? presented.imageOriginal || presented.image : presented[type];
+        if (!url) return res.status(404).json({ message: "Media not found." });
+        return res.json({ url, thumbnailUrl: type === "image" ? presented.imageThumbnail : type === "video" ? presented.videoThumbnail : undefined });
+    } catch (error) {
+        return res.status(500).json({ message: "Unable to refresh media." });
+    }
 }
 
 export async function uploadMedia(req, res) {
     try {
         if (!req.file) return res.status(400).json({ message: "A file is required." });
         if (!hasImagekitConfig()) return res.status(503).json({ message: "Media upload is not configured." });
-        const url = await uploadChatMedia(req.file);
-        res.status(201).json({ url, fileName: req.file.originalname, fileType: req.file.mimetype, fileSize: req.file.size });
+        const { filePath } = await uploadChatMedia(req.file);
+        // This endpoint is also used for group artwork. It returns a temporary
+        // URL for immediate preview plus the path that callers persist.
+        res.status(201).json({
+            url: presentMessageMedia({ image: filePath }).image,
+            filePath,
+            fileName: req.file.originalname,
+            fileType: req.file.mimetype,
+            fileSize: req.file.size,
+        });
     } catch (error) { res.status(500).json({ message: "Failed to upload media." }); }
 }
 
 export async function getUsersForSidebar(req, res) {
     try {
         const loggedInUser = req.userId;
-        const query = String(req.query.q || "").trim().toLowerCase();
-        if (query && !/^[a-z0-9_.-]{1,30}$/.test(query)) {
+        const query = String(req.query.q || "").trim();
+
+        // Never return the entire user directory
+        if (!query) {
             return res.status(200).json([]);
         }
-        const usernameFilter = query
-            ? { username: { $regex: `^${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, $options: "i" } }
-            : {};
 
-        const filteredUsers = await User.find({
-            _id: { $ne: loggedInUser },
-            ...usernameFilter,
-        }).select("fullName username profilePic email bio").limit(query ? 20 : 0).lean();
+        const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(query);
+
+        let filter;
+
+        if (isEmail) {
+            // Exact email search
+            filter = {
+                _id: { $ne: loggedInUser },
+                email: query.toLowerCase(),
+            };
+        } else {
+            // Username search
+            if (!/^[a-zA-Z0-9_.-]{1,30}$/.test(query)) {
+                return res.status(200).json([]);
+            }
+
+            const safeQuery = query.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&"
+            );
+
+            filter = {
+                _id: { $ne: loggedInUser },
+                username: {
+                    $regex: `^${safeQuery}`,
+                    $options: "i",
+                },
+            };
+        }
+
+        const filteredUsers = await User.find(filter)
+            .select("_id fullName username profilePic")
+            .limit(20)
+            .lean();
 
         res.status(200).json(filteredUsers);
     } catch (error) {
-        console.log("Error in getUsersForSidebar: ", error.message);
-        res.status(500).json({ error: "Internal server error" });
+        console.log(
+            "Error in getUsersForSidebar: ",
+            error.message
+        );
+
+        res.status(500).json({
+            error: "Internal server error",
+        });
     }
 }
 
@@ -152,8 +221,6 @@ export async function getConversationsForSidebar(req, res) {
                     fullName: 1,
                     username: 1,
                     profilePic: 1,
-                    email: 1,
-                    bio: 1,
                     unreadCount: 1,
                     lastMessageAt: 1,
                     lastMessage: {
@@ -174,7 +241,10 @@ export async function getConversationsForSidebar(req, res) {
 
         ])
 
-        res.status(200).json(conversations);
+        res.status(200).json(conversations.map((conversation) => ({
+            ...conversation,
+            lastMessage: presentMessage(conversation.lastMessage),
+        })));
 
     } catch (error) {
         console.log("Error in getConversationsForSidebar: ", error.message);
@@ -199,23 +269,25 @@ export async function getMessages(req, res) {
 
         // The legacy array response remains available unless a client opts into pagination.
         if (req.query.paginated !== "true") {
-            const messages = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE).sort({ createdAt: 1 });
-            return res.status(200).json(messages);
+            const messages = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE).sort({ createdAt: 1 }).limit(100);
+            return res.status(200).json(presentMessagesMedia(messages));
         }
 
         const { limit, before } = getPageOptions(req);
         if (before) {
-            filter.$and = [{ $or: [
-                { createdAt: { $lt: before.createdAt } },
-                { createdAt: before.createdAt, _id: { $lt: before.id } },
-            ] }];
+            filter.$and = [{
+                $or: [
+                    { createdAt: { $lt: before.createdAt } },
+                    { createdAt: before.createdAt, _id: { $lt: before.id } },
+                ]
+            }];
         }
         const page = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE)
             .sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
         const hasMore = page.length > limit;
         const messages = (hasMore ? page.slice(0, limit) : page).reverse();
 
-        res.status(200).json({ messages, hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
+        res.status(200).json({ messages: presentMessagesMedia(messages), hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
     } catch (error) {
         console.log("Error in getMessages: ", error.message);
         res.status(500).json({ error: "Internal server error" });
@@ -279,6 +351,8 @@ export async function sendMessage(req, res) {
         const { text, replyTo } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
+        const receiver = await User.exists({ _id: receiverId });
+        if (!receiver) return res.status(404).json({ message: "User not found." });
         const mediaFile = req.file || req.files?.media?.[0];
 
         let imageUrl;
@@ -294,22 +368,22 @@ export async function sendMessage(req, res) {
                 return res.status(503).json({ message: "Media upload is not configured." })
             }
 
-            const url = await uploadChatMedia(mediaFile);
+            const filePath = await uploadChatMedia(mediaFile);
             fileName = mediaFile.originalname;
             fileType = mediaFile.mimetype;
             fileSize = mediaFile.size;
 
             if (mediaFile.mimetype.startsWith("image")) {
-                imageUrl = url;
+                imageUrl = filePath;
             }
             else if (mediaFile.mimetype.startsWith("video")) {
-                videoUrl = url;
+                videoUrl = filePath;
             }
             else if (mediaFile.mimetype.startsWith("audio")) {
-                audioUrl = url;
+                audioUrl = filePath;
             }
             else {
-                fileUrl = url;
+                fileUrl = filePath;
             }
         }
 
@@ -319,6 +393,31 @@ export async function sendMessage(req, res) {
 
         const receiverSocketId = getReceiverSocketId(receiverId);
         const deliveredAt = receiverSocketId.length > 0 ? new Date() : null;
+
+        let validReplyTo = null;
+
+        if (replyTo) {
+            const repliedMessage = await Message.findById(replyTo);
+
+            if (!repliedMessage) {
+                return res.status(400).json({
+                    message: "Invalid reply message.",
+                });
+            }
+
+            const canReplyTo = await isMessageParticipant(
+                repliedMessage,
+                senderId
+            );
+
+            if (!canReplyTo) {
+                return res.status(403).json({
+                    message: "You cannot reply to this message.",
+                });
+            }
+
+            validReplyTo = repliedMessage._id;
+        }
 
         const newMessage = new Message({
             senderId,
@@ -332,7 +431,7 @@ export async function sendMessage(req, res) {
             fileType: fileType || "",
             fileSize: fileSize || 0,
             deliveredAt,
-            replyTo: replyTo || null,
+            replyTo: validReplyTo,
         });
 
         await newMessage.save();
@@ -342,7 +441,7 @@ export async function sendMessage(req, res) {
         const messageSocketIds = [...new Set([...receiverSocketId, ...senderSocketId])];
 
         if (messageSocketIds.length > 0) {
-            io.to(messageSocketIds).emit("newMessage", populatedMessage);
+            io.to(messageSocketIds).emit("newMessage", presentMessage(populatedMessage));
         }
 
         if (receiverSocketId.length === 0) {
@@ -350,11 +449,11 @@ export async function sendMessage(req, res) {
             if (sender) sendMessageNotification({ receiverId, sender, message: populatedMessage }).catch((error) => console.error("Message push failed:", error.message));
         }
 
-        res.status(201).json(populatedMessage);
+        res.status(201).json(presentMessage(populatedMessage));
 
     } catch (error) {
         console.log("Error in sendMessage: ", error.message);
-        res.status(500).json({ message: error.message || "Failed to upload media." });
+        res.status(500).json({ message: "Failed to send message." });
     }
 }
 
@@ -386,7 +485,7 @@ export async function togglePinMessage(req, res) {
             io.to(socketIds).emit("messagePinned", populatedMessage);
         }
 
-        res.status(200).json(populatedMessage);
+        res.status(200).json(presentMessage(populatedMessage));
     } catch (error) {
         console.log("Error in togglePinMessage: ", error.message);
         res.status(500).json({ message: "Internal server error" });
@@ -460,14 +559,14 @@ export async function forwardMessage(req, res) {
             const socketIds = [...new Set([...receiverSocketIds, ...senderSocketIds])];
 
             if (socketIds.length > 0) {
-                io.to(socketIds).emit("newMessage", populatedMessage);
+            io.to(socketIds).emit("newMessage", presentMessage(populatedMessage));
             }
 
             if (receiverSocketIds.length === 0 && senderForNotification) {
                 sendMessageNotification({ receiverId: targetReceiverId, sender: senderForNotification, message: populatedMessage }).catch((error) => console.error("Forwarded-message push failed:", error.message));
             }
 
-            forwardedMessages.push(populatedMessage);
+            forwardedMessages.push(presentMessage(populatedMessage));
         }
 
         res.status(201).json({ messages: forwardedMessages });
@@ -504,9 +603,9 @@ export const editMessage = async (req, res) => {
         const populatedMessage = await populateReply(message._id);
 
         const socketIds = await getMessageSocketIds(message);
-        if (socketIds.length) io.to(socketIds).emit("messageEdited", populatedMessage);
+        if (socketIds.length) io.to(socketIds).emit("messageEdited", presentMessage(populatedMessage));
 
-        res.status(200).json(populatedMessage);
+        res.status(200).json(presentMessage(populatedMessage));
     } catch (error) {
         console.log("Error in editMessage controller:", error.message);
         res.status(500).json({ message: "Internal server error" });
@@ -551,10 +650,10 @@ export const toggleReaction = async (req, res) => {
         const socketIds = await getMessageSocketIds(message);
 
         if (socketIds.length > 0) {
-            io.to(socketIds).emit("messageReaction", populatedMessage);
+            io.to(socketIds).emit("messageReaction", presentMessage(populatedMessage));
         }
 
-        res.status(200).json(populatedMessage);
+        res.status(200).json(presentMessage(populatedMessage));
     } catch (error) {
         console.log("Error in toggleReaction:", error.message);
         res.status(500).json({ message: "Internal server error" });

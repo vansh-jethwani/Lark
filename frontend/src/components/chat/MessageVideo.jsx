@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { PlayIcon } from "lucide-react";
 
 import { isImageKitUrl, withTransform } from "../../lib/imagekit";
@@ -16,8 +17,9 @@ function buildPosterUrl(url) {
 }
 
 /** ImageKit-optimized chat video poster with an app-level play action. */
-export function MessageVideo({ src, onOpen }) {
-  const posterSrc = buildPosterUrl(src);
+export function MessageVideo({ src, thumbnailSrc, onOpen }) {
+  const [posterFailed, setPosterFailed] = useState(false);
+  const posterSrc = posterFailed ? undefined : thumbnailSrc || buildPosterUrl(src);
 
   return (
     <button
@@ -31,6 +33,7 @@ export function MessageVideo({ src, onOpen }) {
           src={posterSrc}
           alt=""
           className="h-[clamp(12rem,32vw,16rem)] w-[clamp(14rem,42vw,22rem)] max-w-[72vw] object-cover opacity-90"
+          onError={() => setPosterFailed(true)}
         />
       ) : (
           <span className="grid h-28 min-w-44 place-items-center bg-black text-white/70">

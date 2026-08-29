@@ -66,14 +66,12 @@ export const useAuthStore = create((set, get) => ({
   connectSocket: (user) => {
     if (!user?._id) return;
     const existingSocket = get().socket;
-    const existingUserId = existingSocket?.io?.opts?.query?.userId;
-    if (existingSocket && String(existingUserId) === String(user._id)) {
-      if (!existingSocket.connected) existingSocket.connect();
-      return;
-    }
     if (existingSocket) existingSocket.disconnect();
 
-    const socket = io(BASE_URL, { query: { userId: user._id } });
+    const socket = io(BASE_URL, {
+    withCredentials: true,
+     transports: ["websocket"],
+});
 
     set({ socket });
 

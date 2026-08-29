@@ -67,6 +67,7 @@ export const useChatStore = create(
       searchQuery: "",
       sidebarTab: "chats",
       messageSearchQuery: "",
+      messageSearchOpen: false,
       composerText: "",
       drafts: {},
       replyingTo: null,
@@ -642,6 +643,7 @@ export const useChatStore = create(
             selectedUser,
             composerText: activeConversationId ? state.drafts?.[activeConversationId] || "" : "",
             messageSearchQuery: "",
+            messageSearchOpen: false,
             messages:
               activeConversationId === state.activeConversationId
                 ? state.messages
@@ -656,8 +658,8 @@ export const useChatStore = create(
         });
       },
 
-      setSearchQuery: (searchQuery) => set({ searchQuery }),
       setMessageSearchQuery: (messageSearchQuery) => set({ messageSearchQuery }),
+setMessageSearchOpen: (messageSearchOpen) => set({ messageSearchOpen }),
       setSidebarTab: (sidebarTab) => set({ sidebarTab }),
       setComposerText: (composerText) => set((state) => ({
         composerText,

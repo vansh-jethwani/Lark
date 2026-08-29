@@ -1,6 +1,11 @@
 import { Avatar, Button } from "@heroui/react";
-import { ChevronLeftIcon, PhoneIcon, SearchIcon, VideoIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import {
+  ChevronLeftIcon,
+  PhoneIcon,
+  SearchIcon,
+  VideoIcon,
+  XIcon,
+} from "lucide-react";
 import { useNavigate } from "react-router";
 import { AppLogo } from "../AppLogo";
 import { AvatarWithOnlineIndicator } from "./AvatarWithOnlineIndicator";
@@ -9,20 +14,36 @@ import { useChatStore } from "../../store/useChatStore";
 import { useSelectedConversation } from "../../hooks/useSelectedConversation";
 
 export function ChatHeader() {
-  const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
+  const setActiveConversationId = useChatStore(
+    (state) => state.setActiveConversationId,
+  );
   const messageSearchQuery = useChatStore((state) => state.messageSearchQuery);
-  const setMessageSearchQuery = useChatStore((state) => state.setMessageSearchQuery);
-  const [searchConversationId, setSearchConversationId] = useState(null);
+  const setMessageSearchQuery = useChatStore(
+    (state) => state.setMessageSearchQuery,
+  );
+  const searchOpen = useChatStore((state) => state.messageSearchOpen);
+  const setSearchOpen = useChatStore((state) => state.setMessageSearchOpen);
   const navigate = useNavigate();
 
   const { activeConversation, isLargeScreen } = useSelectedConversation();
-  const activeConversationId = useChatStore((state) => state.activeConversationId);
+  const activeConversationId = useChatStore(
+    (state) => state.activeConversationId,
+  );
   const canCall = Boolean(activeConversation && !activeConversation.isGroup);
-  const startCall = (type) => window.dispatchEvent(new CustomEvent("lark:start-call", {
-    detail: { type, user: { _id: activeConversation.id, fullName: activeConversation.peer.name, profilePic: activeConversation.peer.avatarUrl, isOnline: activeConversation.peer.isOnline } },
-  }));
-
-  const searchOpen = searchConversationId === activeConversationId;
+  const startCall = (type) =>
+    window.dispatchEvent(
+      new CustomEvent("lark:start-call", {
+        detail: {
+          type,
+          user: {
+            _id: activeConversation.id,
+            fullName: activeConversation.peer.name,
+            profilePic: activeConversation.peer.avatarUrl,
+            isOnline: activeConversation.peer.isOnline,
+          },
+        },
+      }),
+    );
 
   return (
     <header className="sticky top-0 z-10 flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-1.5 py-1.5 sm:gap-2 sm:px-2 sm:py-2">
@@ -40,22 +61,32 @@ export function ChatHeader() {
 
       {activeConversation ? (
         <>
-          <button type="button" onClick={() => navigate(`/chat/${activeConversation.id}/info`)} className="contents" aria-label="Open chat info">
-          <AvatarWithOnlineIndicator isOnline={activeConversation.peer.isOnline ?? true}>
-            <Avatar className="size-9 shrink-0">
-              <Avatar.Image
-                alt={activeConversation.peer.name}
-                src={activeConversation.peer.avatarUrl}
-              />
-              <Avatar.Fallback className="text-sm font-medium">
-                {activeConversation.peer.initials}
-              </Avatar.Fallback>
-            </Avatar>
-          </AvatarWithOnlineIndicator>
-
+          <button
+            type="button"
+            onClick={() => navigate(`/chat/${activeConversation.id}/info`)}
+            className="contents"
+            aria-label="Open chat info"
+          >
+            <AvatarWithOnlineIndicator
+              isOnline={activeConversation.peer.isOnline ?? true}
+            >
+              <Avatar className="size-9 shrink-0">
+                <Avatar.Image
+                  alt={activeConversation.peer.name}
+                  src={activeConversation.peer.avatarUrl}
+                />
+                <Avatar.Fallback className="text-sm font-medium">
+                  {activeConversation.peer.initials}
+                </Avatar.Fallback>
+              </Avatar>
+            </AvatarWithOnlineIndicator>
           </button>
 
-          <button type="button" onClick={() => navigate(`/chat/${activeConversation.id}/info`)} className="min-w-0 flex-1 text-center sm:text-left">
+          <button
+            type="button"
+            onClick={() => navigate(`/chat/${activeConversation.id}/info`)}
+            className="min-w-0 flex-1 text-left"
+          >
             <p className="truncate text-[15px] font-semibold leading-tight">
               {activeConversation.peer.name}
             </p>
@@ -72,12 +103,14 @@ export function ChatHeader() {
         <div className="flex flex-1 items-center gap-2.5 sm:text-left">
           <AppLogo size={36} className="rounded-[9px]" />
           <div className="flex-1 text-center sm:text-left">
-            <p className="truncate text-[13px] font-medium text-muted">Select a conversation</p>
+            <p className="truncate text-[13px] font-medium text-muted">
+              Select a conversation
+            </p>
           </div>
         </div>
       )}
 
-      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-0.5 sm:gap-1">
+      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-3">
         {activeConversation ? (
           searchOpen ? (
             <div className="flex min-w-[180px] items-center gap-1 rounded-full border border-border bg-surface px-2 py-1">
@@ -92,7 +125,7 @@ export function ChatHeader() {
               <button
                 type="button"
                 onClick={() => {
-                  setSearchConversationId(null);
+                  setSearchOpen(false);
                   setMessageSearchQuery("");
                 }}
                 className="rounded-full p-1 text-muted hover:bg-background hover:text-foreground"
@@ -103,9 +136,38 @@ export function ChatHeader() {
             </div>
           ) : (
             <>
-              {canCall ? <Button variant="ghost" size="sm" isIconOnly aria-label="Start audio call" onPress={() => startCall("audio")}><PhoneIcon className="size-5" /></Button> : null}
-              {canCall ? <Button variant="ghost" size="sm" isIconOnly aria-label="Start video call" onPress={() => startCall("video")}><VideoIcon className="size-5" /></Button> : null}
-              <Button variant="ghost" size="sm" isIconOnly className="shrink-0" aria-label="Search messages" onPress={() => setSearchConversationId(activeConversationId)}><SearchIcon className="size-5" strokeWidth={2} aria-hidden /></Button>
+              {canCall ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  isIconOnly
+                  aria-label="Start audio call"
+                  onPress={() => startCall("audio")}
+                >
+                  <PhoneIcon className="size-5" />
+                </Button>
+              ) : null}
+              {canCall ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  isIconOnly
+                  aria-label="Start video call"
+                  onPress={() => startCall("video")}
+                >
+                  <VideoIcon className="size-5" />
+                </Button>
+              ) : null}
+              <Button
+                variant="ghost"
+                size="sm"
+                isIconOnly
+                className="shrink-0"
+                aria-label="Search messages"
+                onPress={() => setSearchOpen(true)}
+              >
+                <SearchIcon className="size-5" strokeWidth={2} aria-hidden />
+              </Button>
             </>
           )
         ) : null}
@@ -117,7 +179,7 @@ export function ChatHeader() {
             isIconOnly
             className="shrink-0"
             aria-label="Close chat"
-            onPress={() => setActiveConversationId(null)}
+            onPress={() => setSearchOpen(true)}
           >
             <XIcon className="size-5.5" strokeWidth={2} aria-hidden />
           </Button>

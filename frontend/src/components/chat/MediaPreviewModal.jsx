@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { DownloadIcon, ForwardIcon, RotateCwIcon, XIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 
 import { withTransform } from "../../lib/imagekit";
+import { refreshMessageMedia } from "../../lib/media";
 
 const FULL_IMAGE_TRANSFORM = "q-auto,w-1920,f-auto";
 const FULL_VIDEO_TRANSFORM = "q-90,w-1280";
@@ -10,6 +11,9 @@ export function MediaPreviewModal({ media, onClose, onForward }) {
   const isOpen = Boolean(media?.src);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [source, setSource] = useState(media?.src || "");
+
+  useEffect(() => setSource(media?.src || ""), [media?.src]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -26,8 +30,8 @@ export function MediaPreviewModal({ media, onClose, onForward }) {
 
   const isVideo = media.type === "video";
   const previewSrc = isVideo
-    ? withTransform(media.src, FULL_VIDEO_TRANSFORM)
-    : withTransform(media.src, FULL_IMAGE_TRANSFORM);
+    ? withTransform(source, FULL_VIDEO_TRANSFORM)
+    : withTransform(source, FULL_IMAGE_TRANSFORM);
   const fileName = media.fileName || (isVideo ? "video" : "image");
 
   return (
@@ -43,7 +47,7 @@ export function MediaPreviewModal({ media, onClose, onForward }) {
           <button type="button" onClick={() => setRotation((value) => (value + 90) % 360)} className="grid size-9 place-items-center rounded-full text-white/80 hover:bg-white/10" aria-label="Rotate image"><RotateCwIcon className="size-5" /></button>
         </> : null}
         {onForward ? <button type="button" onClick={onForward} className="grid size-9 place-items-center rounded-full text-white/80 hover:bg-white/10" aria-label="Forward media"><ForwardIcon className="size-5" /></button> : null}
-        <a href={media.src} download target="_blank" rel="noreferrer" className="grid size-9 place-items-center rounded-full text-white/80 hover:bg-white/10" aria-label="Download original media"><DownloadIcon className="size-5" /></a>
+        <a href={source} download target="_blank" rel="noreferrer" className="grid size-9 place-items-center rounded-full text-white/80 hover:bg-white/10" aria-label="Download original media"><DownloadIcon className="size-5" /></a>
 
         <button
           type="button"
@@ -67,6 +71,7 @@ export function MediaPreviewModal({ media, onClose, onForward }) {
             playsInline
             className="max-h-full max-w-full rounded-lg object-contain"
             onClick={(event) => event.stopPropagation()}
+            onError={async () => { if (media.messageId) try { setSource((await refreshMessageMedia(media.messageId, "video")).url); } catch {} }}
           />
         ) : (
           <img
@@ -75,6 +80,7 @@ export function MediaPreviewModal({ media, onClose, onForward }) {
             className="max-h-full max-w-full rounded-lg object-contain transition-transform duration-150"
             style={{ transform: `scale(${zoom}) rotate(${rotation}deg)`, transformOrigin: "center" }}
             onClick={(event) => event.stopPropagation()}
+            onError={async () => { if (media.messageId) try { setSource((await refreshMessageMedia(media.messageId, "image")).url); } catch {} }}
           />
         )}
       </div>

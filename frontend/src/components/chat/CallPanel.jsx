@@ -58,16 +58,16 @@ export function CallHistory() {
     if (!query) return [];
     return users.filter((user) => user.username?.toLowerCase().includes(query));
   }, [searchQuery, users]);
-  return <div className="mx-auto w-full max-w-2xl space-y-1 p-2 sm:p-3">
+  return <div className="w-full p-0">
     {matchingUsers.length > 0 ? <div className="mb-2 border-b border-border pb-2"><p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">People</p>{matchingUsers.map((user) => <CallUserSearchRow key={user._id} user={user} />)}</div> : null}
     {groups.length === 0 ? <p className="px-3 py-8 text-center text-sm text-muted">{searchQuery.trim() ? (matchingUsers.length > 0 ? "No call history for these users." : "No users match your search.") : "No calls yet"}</p> : groups.map((group) => {
     const latest = group.latest;
     const user = users.find((item) => String(item._id) === String(group.peerId));
     const expanded = expandedKey === group.key;
-    return <div key={group.key} className="overflow-hidden border-b border-border/70 last:border-b-0">
-      <button type="button" className="flex w-full items-center gap-3 px-2 py-3 text-left transition-colors hover:bg-surface/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:px-3" onClick={() => setExpandedKey(expanded ? null : group.key)} aria-expanded={expanded}>
-        <Avatar className="size-11 shrink-0"><Avatar.Image alt={latest.peerName} src={user?.profilePic || latest.peerAvatar} /><Avatar.Fallback>{getInitials(latest.peerName)}</Avatar.Fallback></Avatar>
-        <span className="min-w-0 flex-1"><span className="block truncate text-[15px] font-semibold text-foreground">{latest.peerName}{group.entries.length > 1 ? ` (${group.entries.length})` : ""}</span><span className={`mt-0.5 flex items-center gap-1.5 truncate text-xs ${isUnsuccessful(latest) ? "text-danger" : "text-muted"}`}><CallDirectionIcon entry={latest} />{dateTimeLabel(latest.createdAt)}</span></span>
+    return <div key={group.key} className="overflow-hidden">
+      <button type="button" className="flex w-full items-center gap-3 px-2.5 py-3 text-left transition-colors hover:bg-surface/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setExpandedKey(expanded ? null : group.key)} aria-expanded={expanded}>
+        <Avatar className="size-12 shrink-0"><Avatar.Image alt={latest.peerName} src={user?.profilePic || latest.peerAvatar} /><Avatar.Fallback>{getInitials(latest.peerName)}</Avatar.Fallback></Avatar>
+        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-foreground">{latest.peerName}{group.entries.length > 1 ? ` (${group.entries.length})` : ""}</span><span className={`mt-0.5 flex items-center gap-1 truncate text-xs ${isUnsuccessful(latest) ? "text-danger" : "text-muted"}`}><CallDirectionIcon entry={latest} />{dateTimeLabel(latest.createdAt)}</span></span>
         <CallActionButton entry={latest} />
       </button>
       {expanded ? <div className="space-y-3 border-t border-border/50 bg-surface/30 px-14 py-3 sm:px-16">{group.entries.map((entry) => <CallHistoryDetail key={entry.id} entry={entry} />)}</div> : null}

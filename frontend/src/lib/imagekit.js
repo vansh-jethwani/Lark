@@ -9,6 +9,7 @@ export function isImageKitUrl(url) {
 /** Append a `tr` query param to an ImageKit URL (no-op for other URLs). */
 export function withTransform(url, transform) {
   if (!isImageKitUrl(url)) return url;
+  if (url.includes("ik-s=")) return url;
   const [path, query = ""] = url.split("?");
   const params = new URLSearchParams(query);
   params.set("tr", transform);

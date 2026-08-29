@@ -5,7 +5,7 @@ const imagekit = new ImageKit({
 });
 
 function hasImagekitConfig() {
-  return Boolean(process.env.IMAGEKIT_PRIVATE_KEY);
+  return Boolean(process.env.IMAGEKIT_PRIVATE_KEY && process.env.IMAGEKIT_URL_ENDPOINT);
 }
 
 function createFileName(originalName = "upload") {
@@ -24,9 +24,49 @@ async function uploadChatMedia(file) {
     file: file.buffer.toString("base64"),
     fileName,
     folder: "/chat",
+    isPrivateFile: true,
+    responseFields: ["isPrivateFile"],
   });
 
-  return result.url;
+  return result.filePath;
 }
 
-export { uploadChatMedia, hasImagekitConfig };
+function getSignedMediaUrl(filePath, transformation) {
+  if (!filePath) return "";
+
+  return imagekit.helper.buildSrc({
+    urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
+    src: filePath,
+    signed: true,
+    expiresIn: 300,
+    transformation,
+  });
+}
+
+function getSignedPdfThumbnailUrl(filePath) {
+  if (!filePath) return "";
+
+  return imagekit.helper.buildSrc({
+    urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
+    src: filePath,
+    signed: true,
+    expiresIn: 300,
+    transformation: [
+      {
+        page: 1,
+        width: 560,
+        height: 360,
+        cropMode: "maintain_ratio",
+        quality: 80,
+        format: "jpg",
+      },
+    ],
+  });
+}
+
+export {
+  uploadChatMedia,
+  hasImagekitConfig,
+  getSignedMediaUrl,
+  getSignedPdfThumbnailUrl,
+};

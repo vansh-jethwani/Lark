@@ -21,17 +21,21 @@ const messageSchema = new mongoose.Schema({
   image: {
     type: String,
   },
+  imageFileId: { type: String, default: "" },
   video: {
     type: String,
   },
+  videoFileId: { type: String, default: "" },
   audio: {
     type: String,
     default: "",
   },
+  audioFileId: { type: String, default: "" },
   file: {
     type: String,
     default: "",
   },
+  fileFileId: { type: String, default: "" },
   fileName: {
     type: String,
     default: "",

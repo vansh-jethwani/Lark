@@ -177,7 +177,7 @@ export function ChatInfoPage() {
     try {
       const uploadRes = await axiosInstance.post("/messages/upload", formData);
       if (uploadRes.data?.url) {
-        const result = await updateGroup(conversationId, { profilePic: uploadRes.data.url });
+        const result = await updateGroup(conversationId, { profilePic: uploadRes.data.filePath || uploadRes.data.url });
         if (result) setConversation(result);
       }
     } catch (error) {
