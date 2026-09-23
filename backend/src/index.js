@@ -79,6 +79,12 @@ async function startServer() {
         job.start();
     }
         });
+        server.on("error", (error) => {
+            if (error.code === "EADDRINUSE") {
+                console.error(`\nPort ${PORT} is already in use. Kill the existing process and restart.\n`);
+                process.exit(1);
+            } else { throw error; }
+        });
     } catch (error) {
         console.error("Unable to start server:", error.message);
         process.exit(1);

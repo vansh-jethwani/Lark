@@ -58,6 +58,10 @@ const userSchema = new mongoose.Schema(
       }],
       default: [],
     },
+    publicKey: {
+      type: String,
+      default: "",
+    },
   },
   { timestamps: true }, // createdAt & updatedAt
 );

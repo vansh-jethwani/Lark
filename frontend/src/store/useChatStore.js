@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { axiosInstance } from "../lib/axios";
+import { encryptMessage, decryptMessage } from "../lib/crypto";
+import { mergeCallHistory, normalizeCallRecord, readCallHistory } from "../lib/callHistory";
 import { useAuthStore } from "./useAuthStore";
 import toast from "react-hot-toast";
 
@@ -49,6 +51,55 @@ function updateMessageById(messages, messageId, updater) {
   );
 }
 
+
+async function decryptMessagesArray(messages, get) {
+  if (!messages || !Array.isArray(messages)) return messages;
+  const authUser = useAuthStore.getState().authUser;
+  if (!authUser) return messages;
+
+  return Promise.all(
+    messages.map(async (msg) => {
+      if (msg.ciphertext && msg.iv) {
+        const senderIdStr = String(msg.senderId?._id || msg.senderId);
+        const receiverIdStr = String(msg.receiverId?._id || msg.receiverId);
+        const isOutgoing = senderIdStr === String(authUser._id);
+        const partnerId = isOutgoing ? receiverIdStr : senderIdStr;
+
+        let partnerPubKey = null;
+        if (partnerId) {
+          const conv = get().conversations.find((c) => String(c._id) === partnerId);
+          const userObj = get().users.find((u) => String(u._id) === partnerId);
+          partnerPubKey =
+            conv?.publicKey ||
+            userObj?.publicKey ||
+            msg.sender?.publicKey ||
+            msg.receiver?.publicKey;
+
+          if (!partnerPubKey) {
+            try {
+              const res = await axiosInstance.get(`/auth/public-key/${partnerId}`);
+              partnerPubKey = res.data?.publicKey;
+            } catch {}
+          }
+        }
+
+        if (partnerPubKey) {
+          const plaintext = await decryptMessage(msg.ciphertext, msg.iv, partnerPubKey);
+          if (plaintext) {
+            return { ...msg, text: plaintext };
+          }
+        }
+      }
+      return msg;
+    })
+  );
+}
+
+async function decryptSingleMessage(msg, get) {
+    const res = await decryptMessagesArray([msg], get);
+    return res[0];
+}
+
 export const useChatStore = create(
   persist(
     (set, get) => ({
@@ -74,6 +125,8 @@ export const useChatStore = create(
       editingMessage: null,
       isSendingMedia: false,
       typingUsers: {},
+      callHistory: [],
+      isCallHistoryLoading: false,
 
       getUsers: async () => {
         set({ isUsersLoading: true });
@@ -118,6 +171,18 @@ export const useChatStore = create(
         }
       },
 
+      fetchCallHistory: async () => {
+        if (get().isCallHistoryLoading) return;
+        set({ isCallHistoryLoading: true });
+        try {
+          const res = await axiosInstance.get("/auth/calls");
+          const authUser = useAuthStore.getState().authUser;
+          set({ callHistory: mergeCallHistory(readCallHistory(), asArray(res.data).map((r) => normalizeCallRecord(r, authUser?._id))) });
+        } catch {}
+        finally { set({ isCallHistoryLoading: false }); }
+      },
+
+
       getMessages: async (userId) => {
         set({ isMessagesLoading: true, messages: [], hasMoreMessages: false, nextMessageCursor: null });
         try {
@@ -125,9 +190,10 @@ export const useChatStore = create(
           const baseUrl = conversation?.type === "group" ? `/groups/${userId}/messages` : `/messages/${userId}`;
           const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40`);
           const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
+          const decryptedMessages = await decryptMessagesArray(payload.messages, get);
           if (get().activeConversationId === userId) {
             set((state) => ({
-              messages: asArray(payload.messages),
+              messages: asArray(decryptedMessages),
               hasMoreMessages: Boolean(payload.hasMore),
               nextMessageCursor: payload.nextCursor || null,
               conversations: updateConversation(state.conversations, userId, (conversation) => ({
@@ -181,6 +247,7 @@ export const useChatStore = create(
         try {
           const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40&before=${encodeURIComponent(nextMessageCursor)}`);
           const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
+          payload.messages = await decryptMessagesArray(payload.messages, get); // Patched loadOlderMessages
           if (String(get().activeConversationId) !== String(activeConversationId)) return false;
           set((state) => {
             const existing = new Set(asArray(state.messages).map((message) => String(message._id)));
@@ -221,20 +288,61 @@ export const useChatStore = create(
             }
           }
 
+          if (selectedUser.type !== "group") {
+            let partnerPubKey = selectedUser.publicKey;
+            if (!partnerPubKey) {
+              const conv = get().conversations.find((c) => String(c._id) === String(selectedUser._id));
+              partnerPubKey = conv?.publicKey;
+            }
+            if (!partnerPubKey) {
+              try {
+                const keyRes = await axiosInstance.get(`/auth/public-key/${selectedUser._id}`);
+                partnerPubKey = keyRes.data?.publicKey;
+              } catch {}
+            }
+
+            if (partnerPubKey) {
+              if (finalMessageData instanceof FormData) {
+                const rawText = finalMessageData.get("text");
+                if (rawText && typeof rawText === "string" && rawText.trim()) {
+                  const enc = await encryptMessage(rawText, partnerPubKey);
+                  if (enc) {
+                    finalMessageData.set("ciphertext", enc.ciphertext);
+                    finalMessageData.set("iv", enc.iv);
+                    finalMessageData.set("text", "");
+                  }
+                }
+              } else if (typeof finalMessageData.text === "string" && finalMessageData.text.trim()) {
+                const enc = await encryptMessage(finalMessageData.text, partnerPubKey);
+                if (enc) {
+                  finalMessageData = {
+                    ...finalMessageData,
+                    ciphertext: enc.ciphertext,
+                    iv: enc.iv,
+                    text: "",
+                  };
+                }
+              }
+            }
+          }
+
           const res = await axiosInstance.post(
             selectedUser.type === "group" ? `/groups/${selectedUser._id}/messages` : `/messages/send/${selectedUser._id}`,
             finalMessageData
           );
+
+          const decryptedNewMessage = await decryptSingleMessage(res.data, get);
+
           set((state) => ({
             messages: asArray(state.messages).some(
-              (message) => String(message._id) === String(res.data._id),
+              (message) => String(message._id) === String(decryptedNewMessage._id),
             )
               ? state.messages
-              : [...asArray(state.messages), res.data],
+              : [...asArray(state.messages), decryptedNewMessage],
             composerText: "",
             drafts: { ...state.drafts, [selectedUser._id]: "" },
             replyingTo: null,
-            conversations: upsertConversation(state.conversations, selectedUser, res.data, 0),
+            conversations: upsertConversation(state.conversations, selectedUser, decryptedNewMessage, 0),
           }));
           return true;
         } catch (error) {
@@ -522,7 +630,8 @@ export const useChatStore = create(
           }));
         });
 
-        socket.on("newMessage", async (newMessage) => {
+        socket.on("newMessage", async (rawMessage) => {
+          const newMessage = await decryptSingleMessage(rawMessage, get);
           const authUser = useAuthStore.getState().authUser;
           const authUserId = authUser?._id;
           if (!authUserId) return;

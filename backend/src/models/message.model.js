@@ -14,7 +14,7 @@ const messageSchema = new mongoose.Schema({
   },
   // Kept optional so existing direct-message documents need no migration.
   groupId: { type: mongoose.Schema.Types.ObjectId, ref: "Group", default: null, index: true },
-  text: {
+  ciphertext: { type: String, default: '' }, iv: { type: String, default: '' }, text: {
     type: String,
     default: ""
   },

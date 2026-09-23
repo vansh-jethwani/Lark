@@ -16,6 +16,7 @@ function ChatPage() {
   const getConversations = useChatStore((state) => state.getConversations);
   const getMessages = useChatStore((state) => state.getMessages);
   const getUsers = useChatStore((state) => state.getUsers);
+  const fetchCallHistory = useChatStore((state) => state.fetchCallHistory);
   const isConversationsLoading = useChatStore((state) => state.isConversationsLoading);
   const subscribeToChatEvents = useChatStore((state) => state.subscribeToChatEvents);
   const unsubscribeFromMessages = useChatStore((state) => state.unsubscribeFromMessages);
@@ -48,14 +49,16 @@ function ChatPage() {
   }, [sidebarWidth]);
 
   useEffect(() => {
+    // Fetch users, conversations, and call history all in parallel
     getUsers();
     getConversations();
-  }, [getConversations, getUsers]);
+    fetchCallHistory();
+  }, [getConversations, getUsers, fetchCallHistory]);
 
   useEffect(() => {
-    if (!activeConversationId || isConversationsLoading) return;
+    if (!activeConversationId) return;
     getMessages(activeConversationId);
-  }, [getMessages, activeConversationId, isConversationsLoading]);
+  }, [getMessages, activeConversationId]);
 
   useEffect(() => {
     if (!socket) return;

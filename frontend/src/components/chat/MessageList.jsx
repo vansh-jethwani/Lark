@@ -14,14 +14,13 @@ import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SelectionBar } from "./SelectionBar";
 import { formatMessageDate, getMessageDateKey } from "../../lib/utils";
 import { CallMessage } from "./CallPanel";
-import { mergeCallHistory, normalizeCallRecord, readCallHistory } from "../../lib/callHistory";
-import { axiosInstance } from "../../lib/axios";
+import { mergeCallHistory, readCallHistory } from "../../lib/callHistory";
 import { useAuthStore } from "../../store/useAuthStore";
 
 export function MessageList() {
   const { activeConversation, activeConversationId } = useSelectedConversation();
   const authUser = useAuthStore((state) => state.authUser);
-  const [callHistory, setCallHistory] = useState(() => readCallHistory());
+  const callHistory = useChatStore((state) => state.callHistory);
   const [highlightedMessage, setHighlightedMessage] = useState(null);
   const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);
   const [hiddenPinnedBannerConversationIds, setHiddenPinnedBannerConversationIds] = useState([]);
@@ -52,14 +51,19 @@ export function MessageList() {
   const currentPinnedMessage = pinnedMessages[safePinnedIndex];
   const showPinnedBanner =
     pinnedTotal > 0 && !hiddenPinnedBannerConversationIds.includes(activeConversationId);
+  const isMessagesLoading = useChatStore((state) => state.isMessagesLoading);
   const timeline = useMemo(() => {
     if (!activeConversation) return [];
-    const calls = callHistory
-      .filter((entry) => String(entry.peerId) === String(activeConversationId))
-      .map((entry) => ({ ...entry, timelineType: "call" }));
+    // Only merge call logs AFTER messages have loaded so they appear simultaneously
+    // (callHistory is pre-populated in memory; messages require a network fetch)
+    const calls = isMessagesLoading
+      ? []
+      : callHistory
+          .filter((entry) => String(entry.peerId) === String(activeConversationId))
+          .map((entry) => ({ ...entry, timelineType: "call" }));
     return [...activeConversation.messages.map((message) => ({ ...message, timelineType: "message" })), ...calls]
       .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-  }, [activeConversation, activeConversationId, callHistory]);
+  }, [activeConversation, activeConversationId, callHistory, isMessagesLoading]);
   const isSelectionActive = selectionMode && selectionConversationId === activeConversationId;
   const selectableMessages = activeConversation?.messages || [];
   const selectableTimeline = timeline;
@@ -78,19 +82,17 @@ export function MessageList() {
     : [];
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const currentSearchMatch = searchMatches[currentSearchIndex];
+  // Sync local localStorage call history changes (from active calls) into the store
   useEffect(() => {
-    const refresh = () => setCallHistory((current) => mergeCallHistory(current, readCallHistory()));
+    const refresh = () => {
+      const local = readCallHistory();
+      useChatStore.setState((state) => ({
+        callHistory: mergeCallHistory(state.callHistory, local),
+      }));
+    };
     window.addEventListener("lark:call-history", refresh);
     return () => window.removeEventListener("lark:call-history", refresh);
   }, []);
-
-  useEffect(() => {
-    if (!authUser?._id) return undefined;
-    axiosInstance.get("/auth/calls")
-      .then((response) => setCallHistory((current) => mergeCallHistory(current, response.data.map((record) => normalizeCallRecord(record, authUser._id)))))
-      .catch(() => {});
-    return undefined;
-  }, [authUser?._id]);
 
   useEffect(() => {
     clearTimeout(highlightTimeoutRef.current);

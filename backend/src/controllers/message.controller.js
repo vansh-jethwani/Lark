@@ -5,6 +5,7 @@ import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { sendMessageNotification } from "../lib/notifications.js";
+import { safeCache } from "../lib/redis.js";
 
 const MESSAGE_POPULATE = "text image video audio file fileName senderId";
 const DEFAULT_MESSAGE_PAGE_SIZE = 40;
@@ -142,7 +143,7 @@ export async function getUsersForSidebar(req, res) {
         }
 
         const filteredUsers = await User.find(filter)
-            .select("_id fullName username profilePic")
+            .select("_id fullName username profilePic publicKey")
             .limit(20)
             .lean();
 
@@ -159,18 +160,50 @@ export async function getUsersForSidebar(req, res) {
     }
 }
 
+function sidebarCacheKey(userId) { return `chat:sidebar:${userId}`; }
+function messagesCacheKey(a, b) { return `chat:msgs:${[String(a), String(b)].sort().join(':')}`; }
+function callsCacheKey(userId) { return `chat:calls:${userId}`; }
+
+async function invalidateChatCache(userA, userB) {
+    const keys = [
+        sidebarCacheKey(userA),
+        sidebarCacheKey(userB),
+        messagesCacheKey(userA, userB),
+    ];
+    await Promise.all(keys.map(k => safeCache.del(k)));
+}
+
 export async function getConversationsForSidebar(req, res) {
     try {
         const loggedInUser = req.userId;
+        const cacheKey = sidebarCacheKey(loggedInUser);
+        const cached = await safeCache.get(cacheKey);
+        if (cached) return res.status(200).json(cached);
 
         const conversations = await Message.aggregate([
-            { $match: { $or: [{ senderId: loggedInUser }, { receiverId: loggedInUser }] } },
-            { $sort: { createdAt: -1 } },
+            {
+                $facet: {
+                    sent: [
+                        { $match: { senderId: loggedInUser } },
+                        { $sort: { createdAt: -1 } },
+                        { $group: { _id: "$receiverId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
+                    ],
+                    received: [
+                        { $match: { receiverId: loggedInUser } },
+                        { $sort: { createdAt: -1 } },
+                        { $group: { _id: "$senderId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
+                    ]
+                }
+            },
+            { $project: { all: { $concatArrays: ["$sent", "$received"] } } },
+            { $unwind: "$all" },
+            { $replaceRoot: { newRoot: "$all" } },
+            { $sort: { lastMessageAt: -1 } },
             {
                 $group: {
-                    _id: { $cond: [{ $eq: ["$senderId", loggedInUser] }, "$receiverId", "$senderId"] },
-                    lastMessage: { $first: "$$ROOT" },
-                    lastMessageAt: { $first: "$createdAt" },
+                    _id: "$_id",
+                    lastMessage: { $first: "$lastMessage" },
+                    lastMessageAt: { $first: "$lastMessageAt" },
                 },
             },
             { $sort: { lastMessageAt: -1 } },
@@ -185,7 +218,7 @@ export async function getConversationsForSidebar(req, res) {
                             $match: {
                                 $expr: {
                                     $and: [
-                                        { $eq: ["$senderId", "$$partnerId"] },
+                                        { $eq: ["$senderId", "$partnerId"] },
                                         { $eq: ["$receiverId", loggedInUser] },
                                         { $eq: ["$readAt", null] },
                                     ],
@@ -221,6 +254,7 @@ export async function getConversationsForSidebar(req, res) {
                     fullName: 1,
                     username: 1,
                     profilePic: 1,
+                    publicKey: 1,
                     unreadCount: 1,
                     lastMessageAt: 1,
                     lastMessage: {
@@ -228,6 +262,8 @@ export async function getConversationsForSidebar(req, res) {
                         senderId: "$lastMessage.senderId",
                         receiverId: "$lastMessage.receiverId",
                         text: "$lastMessage.text",
+                        ciphertext: "$lastMessage.ciphertext",
+                        iv: "$lastMessage.iv",
                         image: "$lastMessage.image",
                         video: "$lastMessage.video",
                         audio: "$lastMessage.audio",
@@ -241,10 +277,12 @@ export async function getConversationsForSidebar(req, res) {
 
         ])
 
-        res.status(200).json(conversations.map((conversation) => ({
+        const result = conversations.map((conversation) => ({
             ...conversation,
             lastMessage: presentMessage(conversation.lastMessage),
-        })));
+        }));
+        await safeCache.setex(cacheKey, 60, result);
+        res.status(200).json(result);
 
     } catch (error) {
         console.log("Error in getConversationsForSidebar: ", error.message);
@@ -256,6 +294,17 @@ export async function getMessages(req, res) {
     try {
         const { id: receiverId } = req.params;
         const senderId = req.userId;
+        const isPaginated = req.query.before;
+
+        if (!isPaginated) {
+            const cacheKey = messagesCacheKey(senderId, receiverId);
+            const cached = await safeCache.get(cacheKey);
+            if (cached) {
+                // Fire-and-forget read receipts — don't block the response
+                markUnreadMessagesAsRead(senderId, receiverId).catch(() => {});
+                return res.status(200).json(cached);
+            }
+        }
 
         await markUnreadMessagesAsRead(senderId, receiverId);
 
@@ -287,7 +336,11 @@ export async function getMessages(req, res) {
         const hasMore = page.length > limit;
         const messages = (hasMore ? page.slice(0, limit) : page).reverse();
 
-        res.status(200).json({ messages: presentMessagesMedia(messages), hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
+        const result = { messages: presentMessagesMedia(messages), hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null };
+        if (!isPaginated) {
+            await safeCache.setex(messagesCacheKey(senderId, receiverId), 30, result);
+        }
+        res.status(200).json(result);
     } catch (error) {
         console.log("Error in getMessages: ", error.message);
         res.status(500).json({ error: "Internal server error" });
@@ -338,6 +391,7 @@ export async function markConversationAsRead(req, res) {
         const readerId = req.userId;
 
         const messageIds = await markUnreadMessagesAsRead(readerId, conversationPartnerId);
+        await invalidateChatCache(readerId, conversationPartnerId);
 
         res.status(200).json({ messageIds });
     } catch (error) {
@@ -348,7 +402,7 @@ export async function markConversationAsRead(req, res) {
 
 export async function sendMessage(req, res) {
     try {
-        const { text, replyTo } = req.body;
+        const { text, ciphertext, iv, replyTo } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
         const receiver = await User.exists({ _id: receiverId });
@@ -387,7 +441,7 @@ export async function sendMessage(req, res) {
             }
         }
 
-        if (!text?.trim() && !mediaFile) {
+        if (!text?.trim() && !ciphertext?.trim() && !mediaFile) {
             return res.status(400).json({ message: "Message text or media is required." });
         }
 
@@ -423,6 +477,8 @@ export async function sendMessage(req, res) {
             senderId,
             receiverId,
             text: text || "",
+            ciphertext: ciphertext || "",
+            iv: iv || "",
             image: imageUrl || "",
             video: videoUrl || "",
             audio: audioUrl || "",
@@ -449,6 +505,7 @@ export async function sendMessage(req, res) {
             if (sender) sendMessageNotification({ receiverId, sender, message: populatedMessage }).catch((error) => console.error("Message push failed:", error.message));
         }
 
+        await invalidateChatCache(senderId, receiverId);
         res.status(201).json(presentMessage(populatedMessage));
 
     } catch (error) {
@@ -604,6 +661,7 @@ export const editMessage = async (req, res) => {
 
         const socketIds = await getMessageSocketIds(message);
         if (socketIds.length) io.to(socketIds).emit("messageEdited", presentMessage(populatedMessage));
+        await invalidateChatCache(message.senderId, message.receiverId);
 
         res.status(200).json(presentMessage(populatedMessage));
     } catch (error) {
@@ -690,6 +748,7 @@ export const deleteMessage = async (req, res) => {
 
             const socketIds = await getMessageSocketIds(message);
             if (socketIds.length) io.to(socketIds).emit("messageDeleted", id);
+            await invalidateChatCache(message.senderId, message.receiverId);
 
             return res.status(200).json({
                 messageId: id,
@@ -706,10 +765,11 @@ export const deleteMessage = async (req, res) => {
         if (!alreadyDeleted) {
             message.deletedFor.push(myId);
             await message.save();
-        } await message.save();
+        }
+
+        await invalidateChatCache(message.senderId, message.receiverId || myId);
 
         const senderSocketId = getReceiverSocketId(myId.toString());
-
         if (senderSocketId) {
             io.to(senderSocketId).emit("messageDeletedForMe", id);
         }
