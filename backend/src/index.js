@@ -1,5 +1,3 @@
-// import dotenv from "dotenv";
-// dotenv.config();
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -19,7 +17,7 @@ import groupRoutes from "./routes/group.routes.js";
 import { requireTrustedOrigin, securityHeaders } from "./middlewares/security.middleware.js";
 
 dotenv.config();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 5000;
 const configuredFrontendURL = process.env.FRONTEND_URL || process.env.CLIENT_URL;
 const allowedOrigins = new Set([
     "http://localhost:5173",
@@ -32,6 +30,9 @@ const allowedOrigins = new Set([
 const publicDir = path.join(process.cwd(), 'public')
 
 app.disable("x-powered-by");
+// Behind a proxy (e.g. Render) req.ip is the proxy's IP unless this is set,
+// which would collapse every client's rate-limit bucket into one.
+app.set("trust proxy", 1);
 app.use(securityHeaders);
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
@@ -55,6 +56,7 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/groups", groupRoutes);
 
 app.use((error, req, res, next) => {
+    if (res.headersSent) return next(error);
     console.error("Unhandled request error");
     res.status(error.status || 500).json({ message: "Internal server error" });
 });

@@ -1,8 +1,6 @@
 import webpush from "web-push";
 import User from "../models/user.model.js";
 
-const MAX_PREVIEW_LENGTH = 140;
-
 function isPushConfigured() {
   return Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT);
 }
@@ -18,8 +16,9 @@ function messagePreview(message) {
   if (message.video) return "🎥 Video";
   if (message.audio) return "🎵 Voice message";
   if (message.file) return "📎 File";
-  const text = String(message.text || "").trim();
-  return text.length > MAX_PREVIEW_LENGTH ? `${text.slice(0, MAX_PREVIEW_LENGTH - 1).trimEnd()}…` : text || "New message";
+  // Message text is never embedded in push payloads: it would transit the
+  // push provider's infrastructure in plaintext.
+  return "New message";
 }
 
 async function removeInvalidSubscription(userId, endpoint) {

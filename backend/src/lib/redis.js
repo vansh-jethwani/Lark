@@ -5,12 +5,9 @@ const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
 export const redis = new Redis(redisUrl, {
     retryStrategy(times) {
-        // Retry a few times, then give up to prevent infinite connection loops in dev
-        if (times > 3) {
-            console.warn("Redis connection failed. Running without Redis cache.");
-            return null;
-        }
-        return Math.min(times * 1000, 3000);
+        // Keep retrying with capped backoff so caching recovers on its own
+        // when Redis comes back, instead of disabling the cache permanently.
+        return Math.min(times * 2000, 30000);
     },
     maxRetriesPerRequest: 1, // Don't queue up commands indefinitely if disconnected
 });

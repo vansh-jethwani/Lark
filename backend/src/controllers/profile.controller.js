@@ -2,7 +2,19 @@ import bcrypt from "bcryptjs";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Call from "../models/call.model.js";
+import Group from "../models/group.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
+import { presentMessageMedia } from "../lib/media.js";
+import { disconnectUserSockets } from "../lib/socket.js";
+
+function presentProfilePic(profilePic) {
+  // Database stores the private ImageKit path; clients get a short-lived
+  // signed URL, the same presentation sanitizeGroup applies to group photos.
+  if (typeof profilePic === "string" && profilePic.startsWith("/")) {
+    return presentMessageMedia({ image: profilePic }).image;
+  }
+  return profilePic || "";
+}
 
 function serializeProfile(user) {
   return {
@@ -13,7 +25,7 @@ function serializeProfile(user) {
     bio: user.bio || "",
     phoneNumber: user.phoneNumber || "",
     authProvider: user.authProvider || "password",
-    profilePic: user.profilePic || "",
+    profilePic: presentProfilePic(user.profilePic),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -68,7 +80,8 @@ export async function updateProfile(req, res) {
       if (!hasImagekitConfig()) {
         return res.status(503).json({ message: "Profile photo upload is not configured." });
       }
-      profilePic = await uploadChatMedia(req.file);
+      const { filePath } = await uploadChatMedia(req.file);
+      profilePic = filePath;
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -119,6 +132,9 @@ export async function updatePassword(req, res) {
     }
 
     user.password = await bcrypt.hash(newPassword, 12);
+    // Revoke every existing session: JWTs embed tokenVersion, so bumping it
+    // here invalidates all previously issued tokens.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
     res.status(200).json({ message: "Password updated." });
@@ -146,6 +162,12 @@ export async function deleteProfile(req, res) {
       return res.status(401).json({ message: "Incorrect account password." });
     }
 
+    // Cut the realtime channel first: a deleted account must not keep a live
+    // authenticated socket that still receives events or drives calls.
+    disconnectUserSockets(req.userId);
+    // Pull the user from every group so populate("members") never yields null
+    // entries that would crash group broadcasts.
+    await Group.updateMany({ members: req.userId }, { $pull: { members: req.userId, admins: req.userId } });
     await Message.deleteMany({
       $or: [{ senderId: req.userId }, { receiverId: req.userId }],
     });

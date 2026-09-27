@@ -27,7 +27,9 @@ export function ChatComposer() {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const sendTypingStatus = useChatStore((state) => state.sendTypingStatus);
   const typingTimeoutRef = useRef(null);
-  const { replyingTo, clearReplyingTo } = useChatStore();
+  const typingThrottleRef = useRef(0);
+  const replyingTo = useChatStore((state) => state.replyingTo);
+  const clearReplyingTo = useChatStore((state) => state.clearReplyingTo);
   const selectedGroup = useChatStore((state) => state.conversations.find((item) => String(item._id) === String(activeConversationId)));
   const groupSendRestricted = activeConversation?.isGroup && selectedGroup?.permissions?.sendMessages === "admins" && !selectedGroup.admins?.some((admin) => String(admin._id || admin) === String(authUser?._id));
 
@@ -57,7 +59,14 @@ export function ChatComposer() {
 
   const handleComposerTextChange = (event) => {
     setComposerText(event.target.value);
-    sendTypingStatus(activeConversationId, true);
+
+    // Throttle the "typing" emission (at most once per 2s); the "stopped"
+    // signal below is still debounced at 1200ms after the last keystroke.
+    const now = Date.now();
+    if (now - typingThrottleRef.current > 2000) {
+      typingThrottleRef.current = now;
+      sendTypingStatus(activeConversationId, true);
+    }
 
     clearTimeout(typingTimeoutRef.current);
 

@@ -104,6 +104,19 @@ export async function sendGroupMessage(req, res) {
     const mediaFile = req.file;
     const text = String(req.body.text || "").trim();
     if (!text && !mediaFile) return res.status(400).json({ message: "Message text or media is required." });
+    // Idempotency: a retried send carries the same clientId, so return the
+    // already-created message instead of minting a duplicate.
+    const rawClientId = req.body.clientId;
+    const clientId = typeof rawClientId === "string" && rawClientId.trim() ? rawClientId.trim() : null;
+    if (clientId) {
+      const existing = await Message.findOne({ senderId: req.userId, clientId });
+      if (existing) {
+        const populatedExisting = await Message.findById(existing._id)
+          .populate("senderId", "fullName username profilePic")
+          .populate("replyTo", "text image video audio file fileName senderId");
+        return res.status(200).json(presentMessageMedia(populatedExisting));
+      }
+    }
     let media = {};
     if (mediaFile) {
       if (!hasImagekitConfig()) return res.status(503).json({ message: "Media upload is not configured." });
@@ -111,7 +124,29 @@ export async function sendGroupMessage(req, res) {
       const kind = mediaFile.mimetype.startsWith("image") ? "image" : mediaFile.mimetype.startsWith("video") ? "video" : mediaFile.mimetype.startsWith("audio") ? "audio" : "file";
       media = { [kind]: filePath, [`${kind}FileId`]: fileId, fileName: mediaFile.originalname, fileType: mediaFile.mimetype, fileSize: mediaFile.size };
     }
-    const message = await Message.create({ senderId: req.userId, groupId: group._id, text, replyTo: req.body.replyTo || null, ...media });
+
+    // A reply target must exist and live in THIS group. Without this check a
+    // member could attach any message (e.g. someone's DM) and its content
+    // would be broadcast to every group member.
+    let validReplyTo = null;
+    if (req.body.replyTo) {
+      const repliedMessage = await Message.findById(req.body.replyTo);
+      if (!repliedMessage) {
+        return res.status(400).json({ message: "Invalid reply message." });
+      }
+      const inSameGroup = repliedMessage.groupId && String(repliedMessage.groupId) === String(group._id);
+      const requesterIsParticipant = repliedMessage.groupId
+        ? Boolean(await Group.exists({ _id: repliedMessage.groupId, members: req.userId }))
+        : [repliedMessage.senderId, repliedMessage.receiverId].some(
+            (participant) => participant && String(participant) === String(req.userId)
+          );
+      if (!inSameGroup || !requesterIsParticipant) {
+        return res.status(403).json({ message: "You cannot reply to this message." });
+      }
+      validReplyTo = repliedMessage._id;
+    }
+
+    const message = await Message.create({ senderId: req.userId, groupId: group._id, text, replyTo: validReplyTo, clientId: clientId || undefined, ...media });
     const populated = await Message.findById(message._id)
       .populate("senderId", "fullName username profilePic")
       .populate("replyTo", "text image video audio file fileName senderId");
@@ -179,12 +214,23 @@ export async function createGroup(req, res) {
         .json({ message: "Add at least one member to create a group." });
     }
 
+    if (memberIds.length > 50) {
+      return res
+        .status(400)
+        .json({ message: "You can add at most 50 members at once." });
+    }
+
     const users = await User.find({ _id: { $in: memberIds } }).select("_id");
     if (users.length !== memberIds.length) {
       return res.status(400).json({ message: "One or more members are invalid." });
     }
 
     const members = [...new Set([id(req.userId), ...memberIds])];
+    if (members.length > 256) {
+      return res
+        .status(400)
+        .json({ message: "Groups are limited to 256 members." });
+    }
     const group = await Group.create({
       name,
       profilePic: req.body.profilePic || "",
@@ -242,15 +288,20 @@ export async function updatePermissions(req, res) {
     }
 
     const allowed = ["editInfo", "addMembers", "sendMessages"];
-    allowed.forEach((key) => {
+    // Validate every entry first: a `return` inside forEach only exits the
+    // callback, so validating in a loop lets execution fall through to
+    // group.save() and a second res.json() (ERR_HTTP_HEADERS_SENT).
+    const permissionUpdates = {};
+    for (const key of allowed) {
       if (req.body[key] !== undefined) {
         const value = String(req.body[key]).trim().toLowerCase();
         if (value !== "admins" && value !== "members") {
           return res.status(400).json({ message: `Invalid permission value for ${key}.` });
         }
-        group.permissions[key] = value;
+        permissionUpdates[key] = value;
       }
-    });
+    }
+    Object.assign(group.permissions, permissionUpdates);
 
     await group.save();
     const result = await populate(Group.findById(group._id));
@@ -277,6 +328,12 @@ export async function addMembers(req, res) {
       ...new Set((req.body.memberIds || []).map(id)),
     ];
 
+    if (memberIds.length > 50) {
+      return res
+        .status(400)
+        .json({ message: "You can add at most 50 members at once." });
+    }
+
     const users = await User.find({ _id: { $in: memberIds } }).select("_id");
     if (users.length !== memberIds.length) {
       return res.status(400).json({ message: "One or more members are invalid." });
@@ -288,6 +345,12 @@ export async function addMembers(req, res) {
 
     if (newMembers.length === 0) {
       return res.status(400).json({ message: "All selected users are already members." });
+    }
+
+    if (group.members.length + newMembers.length > 256) {
+      return res
+        .status(400)
+        .json({ message: "Groups are limited to 256 members." });
     }
 
     group.members = [...group.members, ...newMembers];

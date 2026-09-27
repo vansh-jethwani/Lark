@@ -9,6 +9,7 @@ import {
   FileIcon,
   ForwardIcon,
   PinIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 
 import { withTransform } from "../../lib/imagekit";
@@ -29,6 +30,26 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
 const IMAGE_TRANSFORM = "q-auto,w-640,f-auto";
+
+function MarkdownLink({ href, children, ...props }) {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+      {children}
+    </a>
+  );
+}
+
+// Only allow safe URL schemes in rendered markdown links; anything else
+// (e.g. javascript:) is dropped instead of rendered.
+function safeUrlTransform(url) {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (["http:", "https:", "mailto:"].includes(parsed.protocol)) return url;
+  } catch {
+    /* fall through and drop the URL */
+  }
+  return "";
+}
 
 function HighlightedMessageText({ text, query }) {
   const value = String(text || "");
@@ -195,13 +216,12 @@ export const MessageBubble = memo(function MessageBubble({
     ? "message-receipt--read"
     : "message-receipt--sent";
 
-  const {
-    deleteMessage,
-    togglePinMessage,
-    setEditingMessage,
-    toggleReaction,
-    setReplyingTo,
-  } = useChatStore();
+  const deleteMessage = useChatStore((state) => state.deleteMessage);
+  const togglePinMessage = useChatStore((state) => state.togglePinMessage);
+  const setEditingMessage = useChatStore((state) => state.setEditingMessage);
+  const toggleReaction = useChatStore((state) => state.toggleReaction);
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo);
+  const retrySend = useChatStore((state) => state.retrySend);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({
@@ -601,6 +621,8 @@ export const MessageBubble = memo(function MessageBubble({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight]}
+                  components={{ a: MarkdownLink }}
+                  urlTransform={safeUrlTransform}
                 >
                   {String(message.text || "")}
                 </ReactMarkdown>
@@ -640,6 +662,17 @@ export const MessageBubble = memo(function MessageBubble({
               />
             ) : null}
           </p>
+
+          {isOwnMessage && message.status === "failed" ? (
+            <button
+              type="button"
+              onClick={() => retrySend(messageId)}
+              className="mt-1 flex items-center justify-end gap-1 text-[11px] font-medium text-danger hover:underline"
+            >
+              <RefreshCwIcon className="size-3" aria-hidden />
+              Failed to send — tap to retry
+            </button>
+          ) : null}
         </div>
 
         {/* CONTEXT MENU */}

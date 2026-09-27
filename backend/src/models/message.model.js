@@ -14,9 +14,13 @@ const messageSchema = new mongoose.Schema({
   },
   // Kept optional so existing direct-message documents need no migration.
   groupId: { type: mongoose.Schema.Types.ObjectId, ref: "Group", default: null, index: true },
-  ciphertext: { type: String, default: '' }, iv: { type: String, default: '' }, text: {
+  // Idempotency key supplied by the client on send. Sparse + indexed so retries
+  // return the existing message instead of creating a duplicate.
+  clientId: { type: String, index: true, sparse: true },
+  ciphertext: { type: String, default: '', maxlength: 20000 }, iv: { type: String, default: '', maxlength: 200 }, text: {
     type: String,
-    default: ""
+    default: "",
+    maxlength: 5000
   },
   image: {
     type: String,

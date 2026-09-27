@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   Reply,
   Pencil,
@@ -23,6 +24,22 @@ export function MessageContextMenu({
   onSelect,
   onReact,
 }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    menuRef.current?.focus();
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
     <>
       {/* Close when clicking outside */}
@@ -32,7 +49,11 @@ export function MessageContextMenu({
       />
 
       <div
-        className="fixed z-50 w-56 rounded-xl border border-border bg-background p-2 shadow-2xl"
+        ref={menuRef}
+        role="menu"
+        aria-label="Message actions"
+        tabIndex={-1}
+        className="fixed z-50 w-56 rounded-xl border border-border bg-background p-2 shadow-2xl outline-none"
         style={{
           top: position.y,
           left: position.x,
@@ -99,6 +120,8 @@ function MenuButton({
 }) {
   return (
     <button
+      type="button"
+      role="menuitem"
       onClick={onClick}
       className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition hover:bg-base-200 ${
         danger ? "text-red-500" : ""

@@ -9,7 +9,7 @@ export const ConversationRow = memo(function ConversationRow({ user, selected, o
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={() => onSelect(user.id)}
       className={`flex w-full items-center gap-3  px-3 py-2.5 text-left ${
         selected ? "bg-accent-soft" : ""
       }`}

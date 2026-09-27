@@ -2,6 +2,17 @@ import mongoose from "mongoose";
 
 const buckets = new Map();
 
+// Expired buckets are recreated lazily on the next request anyway, so evict
+// them on a timer: without this the map grows by one entry per route x key
+// for the lifetime of the process.
+const bucketSweeper = setInterval(() => {
+  const now = Date.now();
+  for (const [bucketKey, bucket] of buckets) {
+    if (bucket.resetAt <= now) buckets.delete(bucketKey);
+  }
+}, 60_000);
+if (typeof bucketSweeper.unref === "function") bucketSweeper.unref();
+
 // Intentionally small in-memory limiter: it protects a single process without
 // introducing a new operational dependency. Use a shared store when scaling.
 export function rateLimit({ windowMs, max, key = (req) => req.ip }) {

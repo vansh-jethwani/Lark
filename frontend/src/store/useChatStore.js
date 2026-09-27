@@ -51,6 +51,97 @@ function updateMessageById(messages, messageId, updater) {
   );
 }
 
+// In-flight public-key fetches, keyed by partner userId, so concurrent
+// messages from the same partner share a single network request instead
+// of firing one GET /auth/public-key/:id per message.
+const publicKeyFetchCache = new Map();
+
+async function fetchPartnerPublicKey(partnerId) {
+  const key = String(partnerId || "");
+  if (!key) return null;
+  let pending = publicKeyFetchCache.get(key);
+  if (!pending) {
+    pending = axiosInstance
+      .get(`/auth/public-key/${key}`)
+      .then((res) => res.data?.publicKey || null)
+      .catch(() => null)
+      .finally(() => {
+        publicKeyFetchCache.delete(key);
+      });
+    publicKeyFetchCache.set(key, pending);
+  }
+  return pending;
+}
+
+// Per-conversation request tokens. When the user switches conversations
+// quickly (A -> B -> A), a stale response for an older request is ignored
+// instead of overwriting fresher state.
+const messagesRequestTokens = {};
+const olderMessagesRequestTokens = {};
+
+async function postMessageToServer(get, messageData, selectedUser) {
+  const { replyingTo } = get();
+  let finalMessageData = messageData;
+
+  if (replyingTo) {
+    const replyToId = replyingTo._id || replyingTo.id;
+
+    if (messageData instanceof FormData) {
+      finalMessageData = messageData;
+      if (!finalMessageData.has("replyTo")) {
+        finalMessageData.append("replyTo", replyToId);
+      }
+    } else {
+      finalMessageData = {
+        ...messageData,
+        replyTo: replyToId,
+      };
+    }
+  }
+
+  if (selectedUser.type !== "group") {
+    let partnerPubKey = selectedUser.publicKey;
+    if (!partnerPubKey) {
+      const conv = get().conversations.find((c) => String(c._id) === String(selectedUser._id));
+      partnerPubKey = conv?.publicKey;
+    }
+    if (!partnerPubKey) {
+      partnerPubKey = await fetchPartnerPublicKey(selectedUser._id);
+    }
+
+    if (partnerPubKey) {
+      if (finalMessageData instanceof FormData) {
+        const rawText = finalMessageData.get("text");
+        if (rawText && typeof rawText === "string" && rawText.trim()) {
+          const enc = await encryptMessage(rawText, partnerPubKey);
+          if (enc) {
+            finalMessageData.set("ciphertext", enc.ciphertext);
+            finalMessageData.set("iv", enc.iv);
+            finalMessageData.set("text", "");
+          }
+        }
+      } else if (typeof finalMessageData.text === "string" && finalMessageData.text.trim()) {
+        const enc = await encryptMessage(finalMessageData.text, partnerPubKey);
+        if (enc) {
+          finalMessageData = {
+            ...finalMessageData,
+            ciphertext: enc.ciphertext,
+            iv: enc.iv,
+            text: "",
+          };
+        }
+      }
+    }
+  }
+
+  const res = await axiosInstance.post(
+    selectedUser.type === "group" ? `/groups/${selectedUser._id}/messages` : `/messages/send/${selectedUser._id}`,
+    finalMessageData
+  );
+
+  return res.data;
+}
+
 
 async function decryptMessagesArray(messages, get) {
   if (!messages || !Array.isArray(messages)) return messages;
@@ -76,10 +167,7 @@ async function decryptMessagesArray(messages, get) {
             msg.receiver?.publicKey;
 
           if (!partnerPubKey) {
-            try {
-              const res = await axiosInstance.get(`/auth/public-key/${partnerId}`);
-              partnerPubKey = res.data?.publicKey;
-            } catch {}
+            partnerPubKey = await fetchPartnerPublicKey(partnerId);
           }
         }
 
@@ -184,6 +272,8 @@ export const useChatStore = create(
 
 
       getMessages: async (userId) => {
+        const requestToken = (messagesRequestTokens[userId] =
+          (messagesRequestTokens[userId] || 0) + 1);
         set({ isMessagesLoading: true, messages: [], hasMoreMessages: false, nextMessageCursor: null });
         try {
           const conversation = get().conversations.find((item) => String(item._id) === String(userId));
@@ -191,6 +281,7 @@ export const useChatStore = create(
           const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40`);
           const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
           const decryptedMessages = await decryptMessagesArray(payload.messages, get);
+          if (messagesRequestTokens[userId] !== requestToken) return;
           if (get().activeConversationId === userId) {
             set((state) => ({
               messages: asArray(decryptedMessages),
@@ -203,12 +294,13 @@ export const useChatStore = create(
             }));
           }
         } catch (error) {
+          if (messagesRequestTokens[userId] !== requestToken) return;
           if (get().activeConversationId === userId) {
             set({ messages: [] });
           }
           toast.error(error.response?.data?.message || "Failed to load messages");
         } finally {
-          if (get().activeConversationId === userId) {
+          if (messagesRequestTokens[userId] === requestToken && get().activeConversationId === userId) {
             set({ isMessagesLoading: false });
           }
         }
@@ -241,6 +333,8 @@ export const useChatStore = create(
       loadOlderMessages: async () => {
         const { activeConversationId, nextMessageCursor, hasMoreMessages, isLoadingOlderMessages } = get();
         if (!activeConversationId || !nextMessageCursor || !hasMoreMessages || isLoadingOlderMessages) return false;
+        const requestToken = (olderMessagesRequestTokens[activeConversationId] =
+          (olderMessagesRequestTokens[activeConversationId] || 0) + 1);
         const conversation = get().conversations.find((item) => String(item._id) === String(activeConversationId));
         const baseUrl = conversation?.type === "group" ? `/groups/${activeConversationId}/messages` : `/messages/${activeConversationId}`;
         set({ isLoadingOlderMessages: true });
@@ -248,6 +342,7 @@ export const useChatStore = create(
           const res = await axiosInstance.get(`${baseUrl}?paginated=true&limit=40&before=${encodeURIComponent(nextMessageCursor)}`);
           const payload = Array.isArray(res.data) ? { messages: res.data, hasMore: false, nextCursor: null } : res.data;
           payload.messages = await decryptMessagesArray(payload.messages, get); // Patched loadOlderMessages
+          if (olderMessagesRequestTokens[activeConversationId] !== requestToken) return false;
           if (String(get().activeConversationId) !== String(activeConversationId)) return false;
           set((state) => {
             const existing = new Set(asArray(state.messages).map((message) => String(message._id)));
@@ -261,91 +356,143 @@ export const useChatStore = create(
         } catch (error) {
           toast.error(error.response?.data?.message || "Failed to load older messages");
           return false;
-        } finally { set({ isLoadingOlderMessages: false }); }
+        } finally {
+          if (olderMessagesRequestTokens[activeConversationId] === requestToken) {
+            set({ isLoadingOlderMessages: false });
+          }
+        }
       },
 
       sendMessage: async (messageData) => {
         const { selectedUser } = get();
         if (!selectedUser) return false;
 
+        // Optimistic insert: show the message instantly with a temp id.
+        // On success it is replaced by the server message; on failure it is
+        // marked "failed" so the user can retry it from the message bubble.
+        const authUser = useAuthStore.getState().authUser;
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const isFormData = messageData instanceof FormData;
+        // Idempotency key: the server dedups retried sends on (senderId, clientId).
+        // Generated once per logical send so retries reuse the same key.
+        const clientId =
+          typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `cid-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        let payloadToSend = messageData;
+        if (isFormData) {
+          if (!messageData.has("clientId")) messageData.append("clientId", clientId);
+        } else {
+          payloadToSend = { ...messageData, clientId: messageData?.clientId || clientId };
+        }
+        const optimisticMessage = {
+          _id: tempId,
+          senderId: authUser?._id,
+          receiverId: selectedUser.type === "group" ? null : selectedUser._id,
+          groupId: selectedUser.type === "group" ? selectedUser._id : null,
+          text: isFormData ? String(messageData.get("text") || "") : String(messageData?.text || ""),
+          createdAt: new Date().toISOString(),
+          status: "sending",
+          targetConversationId: selectedUser._id,
+          pendingPayload: payloadToSend,
+        };
+
+        set((state) => ({
+          messages: [...asArray(state.messages), optimisticMessage],
+        }));
+
         try {
-          const { replyingTo } = get();
-          let finalMessageData = messageData;
+          const serverMessage = await postMessageToServer(get, payloadToSend, selectedUser);
+          const decryptedNewMessage = await decryptSingleMessage(serverMessage, get);
 
-          if (replyingTo) {
-            const replyToId = replyingTo._id || replyingTo.id;
-
-            if (messageData instanceof FormData) {
-              finalMessageData = messageData;
-              if (!finalMessageData.has("replyTo")) {
-                finalMessageData.append("replyTo", replyToId);
+          set((state) => {
+            const current = asArray(state.messages);
+            let replaced = false;
+            const next = current.map((message) => {
+              if (String(message._id) === tempId) {
+                replaced = true;
+                return decryptedNewMessage;
               }
-            } else {
-              finalMessageData = {
-                ...messageData,
-                replyTo: replyToId,
-              };
-            }
-          }
-
-          if (selectedUser.type !== "group") {
-            let partnerPubKey = selectedUser.publicKey;
-            if (!partnerPubKey) {
-              const conv = get().conversations.find((c) => String(c._id) === String(selectedUser._id));
-              partnerPubKey = conv?.publicKey;
-            }
-            if (!partnerPubKey) {
-              try {
-                const keyRes = await axiosInstance.get(`/auth/public-key/${selectedUser._id}`);
-                partnerPubKey = keyRes.data?.publicKey;
-              } catch {}
-            }
-
-            if (partnerPubKey) {
-              if (finalMessageData instanceof FormData) {
-                const rawText = finalMessageData.get("text");
-                if (rawText && typeof rawText === "string" && rawText.trim()) {
-                  const enc = await encryptMessage(rawText, partnerPubKey);
-                  if (enc) {
-                    finalMessageData.set("ciphertext", enc.ciphertext);
-                    finalMessageData.set("iv", enc.iv);
-                    finalMessageData.set("text", "");
-                  }
-                }
-              } else if (typeof finalMessageData.text === "string" && finalMessageData.text.trim()) {
-                const enc = await encryptMessage(finalMessageData.text, partnerPubKey);
-                if (enc) {
-                  finalMessageData = {
-                    ...finalMessageData,
-                    ciphertext: enc.ciphertext,
-                    iv: enc.iv,
-                    text: "",
-                  };
-                }
-              }
-            }
-          }
-
-          const res = await axiosInstance.post(
-            selectedUser.type === "group" ? `/groups/${selectedUser._id}/messages` : `/messages/send/${selectedUser._id}`,
-            finalMessageData
-          );
-
-          const decryptedNewMessage = await decryptSingleMessage(res.data, get);
-
-          set((state) => ({
-            messages: asArray(state.messages).some(
-              (message) => String(message._id) === String(decryptedNewMessage._id),
-            )
-              ? state.messages
-              : [...asArray(state.messages), decryptedNewMessage],
-            composerText: "",
-            drafts: { ...state.drafts, [selectedUser._id]: "" },
-            replyingTo: null,
-            conversations: upsertConversation(state.conversations, selectedUser, decryptedNewMessage, 0),
-          }));
+              return message;
+            });
+            return {
+              messages: replaced
+                ? next
+                : current.some(
+                    (message) => String(message._id) === String(decryptedNewMessage._id),
+                  )
+                  ? current
+                  : [...current, decryptedNewMessage],
+              composerText: "",
+              drafts: { ...state.drafts, [selectedUser._id]: "" },
+              replyingTo: null,
+              conversations: upsertConversation(state.conversations, selectedUser, decryptedNewMessage, 0),
+            };
+          });
           return true;
         } catch (error) {
+          set((state) => ({
+            messages: asArray(state.messages).map((message) =>
+              String(message._id) === tempId ? { ...message, status: "failed" } : message,
+            ),
+          }));
+          toast.error(error.response?.data?.message || "Failed to send message");
+          return false;
+        }
+      },
+
+      retrySend: async (tempId) => {
+        const temp = asArray(get().messages).find(
+          (message) => String(message._id) === String(tempId),
+        );
+        if (!temp?.pendingPayload) return false;
+
+        const targetId = temp.targetConversationId;
+        const target =
+          asArray(get().conversations).find((c) => String(c._id) === String(targetId)) ||
+          asArray(get().users).find((u) => String(u._id) === String(targetId));
+        if (!target) {
+          toast.error("Conversation is no longer available");
+          return false;
+        }
+
+        set((state) => ({
+          messages: asArray(state.messages).map((message) =>
+            String(message._id) === String(tempId) ? { ...message, status: "sending" } : message,
+          ),
+        }));
+
+        try {
+          const serverMessage = await postMessageToServer(get, temp.pendingPayload, target);
+          const decryptedNewMessage = await decryptSingleMessage(serverMessage, get);
+          set((state) => {
+            const current = asArray(state.messages);
+            let replaced = false;
+            const next = current.map((message) => {
+              if (String(message._id) === String(tempId)) {
+                replaced = true;
+                return decryptedNewMessage;
+              }
+              return message;
+            });
+            return {
+              messages: replaced
+                ? next
+                : current.some(
+                    (message) => String(message._id) === String(decryptedNewMessage._id),
+                  )
+                  ? current
+                  : [...current, decryptedNewMessage],
+              conversations: upsertConversation(state.conversations, target, decryptedNewMessage, 0),
+            };
+          });
+          return true;
+        } catch (error) {
+          set((state) => ({
+            messages: asArray(state.messages).map((message) =>
+              String(message._id) === String(tempId) ? { ...message, status: "failed" } : message,
+            ),
+          }));
           toast.error(error.response?.data?.message || "Failed to send message");
           return false;
         }
@@ -647,6 +794,18 @@ export const useChatStore = create(
             const hasMessage = asArray(state.messages).some(
               (message) => String(message._id) === String(newMessage._id),
             );
+            // The server echoes our own message back over the socket; if that
+            // echo arrives before the POST response, replace the optimistic
+            // placeholder with the confirmed message instead of duplicating it.
+            const optimisticIndex = asArray(state.messages).findIndex(
+              (message) =>
+                String(message._id).startsWith("temp-") &&
+                asId(message.senderId) === asId(newMessage.senderId) &&
+                String(message.text || "") === String(newMessage.text || "") &&
+                Math.abs(
+                  new Date(newMessage.createdAt).getTime() - new Date(message.createdAt).getTime(),
+                ) < 15000,
+            );
             const existingConversation = state.conversations.find(
               (conversation) => conversation._id === partnerId,
             );
@@ -655,11 +814,18 @@ export const useChatStore = create(
                 ? Number(existingConversation?.unreadCount || 0) + 1
                 : 0;
 
+            let messages = state.messages;
+            if (isActiveConversation && !hasMessage) {
+              if (optimisticIndex >= 0) {
+                messages = [...asArray(state.messages)];
+                messages[optimisticIndex] = newMessage;
+              } else {
+                messages = [...asArray(state.messages), newMessage];
+              }
+            }
+
             return {
-              messages:
-                isActiveConversation && !hasMessage
-                  ? [...asArray(state.messages), newMessage]
-                  : state.messages,
+              messages,
               conversations: upsertConversation(state.conversations, partner, newMessage, unreadCount),
             };
           });

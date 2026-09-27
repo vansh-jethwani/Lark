@@ -3,7 +3,7 @@ import Message from "../models/message.model.js";
 import Group from "../models/group.model.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
-import { getReceiverSocketId, io } from "../lib/socket.js";
+import { getReceiverSocketId, io, isUserOnline } from "../lib/socket.js";
 import { sendMessageNotification } from "../lib/notifications.js";
 import { safeCache } from "../lib/redis.js";
 
@@ -184,12 +184,12 @@ export async function getConversationsForSidebar(req, res) {
             {
                 $facet: {
                     sent: [
-                        { $match: { senderId: loggedInUser } },
+                        { $match: { senderId: loggedInUser, deletedFor: { $nin: [loggedInUser] } } },
                         { $sort: { createdAt: -1 } },
                         { $group: { _id: "$receiverId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
                     ],
                     received: [
-                        { $match: { receiverId: loggedInUser } },
+                        { $match: { receiverId: loggedInUser, deletedFor: { $nin: [loggedInUser] } } },
                         { $sort: { createdAt: -1 } },
                         { $group: { _id: "$senderId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
                     ]
@@ -223,6 +223,8 @@ export async function getConversationsForSidebar(req, res) {
                                         { $eq: ["$readAt", null] },
                                     ],
                                 },
+                                // A message the reader deleted for themselves is not "unread".
+                                deletedFor: { $nin: [loggedInUser] },
                             },
                         },
                         { $count: "count" },
@@ -360,9 +362,16 @@ async function markUnreadMessagesAsRead(readerId, conversationPartnerId) {
     const messageIds = unreadMessages.map((message) => message._id);
 
     await Message.updateMany(
-        { _id: { $in: messageIds } },
-        { $set: { readAt, deliveredAt: readAt } },
-    );
+    { _id: { $in: messageIds }, deliveredAt: null },
+    // Backfill deliveredAt only when it was never set, instead of
+    // clobbering the true delivery timestamp with the read time.
+    { $set: { readAt, deliveredAt: readAt } },
+);
+await Message.updateMany(
+    { _id: { $in: messageIds }, deliveredAt: { $ne: null } },
+    { $set: { readAt } },
+);
+
 
     const senderSocketIds = getReceiverSocketId(conversationPartnerId);
     if (senderSocketIds.length > 0) {
@@ -402,11 +411,24 @@ export async function markConversationAsRead(req, res) {
 
 export async function sendMessage(req, res) {
     try {
-        const { text, ciphertext, iv, replyTo } = req.body;
+        const { text, ciphertext, iv, replyTo, clientId: rawClientId } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
         const receiver = await User.exists({ _id: receiverId });
         if (!receiver) return res.status(404).json({ message: "User not found." });
+
+        // Idempotency: a retried send (network retry, double-tap) carries the
+        // same clientId, so return the already-created message instead of
+        // minting a duplicate. Checked before any media upload.
+        const clientId = typeof rawClientId === "string" && rawClientId.trim() ? rawClientId.trim() : null;
+        if (clientId) {
+            const existingMessage = await Message.findOne({ senderId, clientId });
+            if (existingMessage) {
+                const populatedExisting = await populateReply(existingMessage._id);
+                return res.status(200).json(presentMessage(populatedExisting));
+            }
+        }
+
         const mediaFile = req.file || req.files?.media?.[0];
 
         let imageUrl;
@@ -422,7 +444,7 @@ export async function sendMessage(req, res) {
                 return res.status(503).json({ message: "Media upload is not configured." })
             }
 
-            const filePath = await uploadChatMedia(mediaFile);
+            const { filePath } = await uploadChatMedia(mediaFile);
             fileName = mediaFile.originalname;
             fileType = mediaFile.mimetype;
             fileSize = mediaFile.size;
@@ -446,7 +468,7 @@ export async function sendMessage(req, res) {
         }
 
         const receiverSocketId = getReceiverSocketId(receiverId);
-        const deliveredAt = receiverSocketId.length > 0 ? new Date() : null;
+        const deliveredAt = (await isUserOnline(receiverId)) ? new Date() : null;
 
         let validReplyTo = null;
 
@@ -479,6 +501,7 @@ export async function sendMessage(req, res) {
             text: text || "",
             ciphertext: ciphertext || "",
             iv: iv || "",
+            clientId: clientId || undefined,
             image: imageUrl || "",
             video: videoUrl || "",
             audio: audioUrl || "",
@@ -566,6 +589,12 @@ export async function forwardMessage(req, res) {
             return res.status(400).json({ message: "Forward recipient is required." });
         }
 
+        // Bound the fan-out: every recipient triggers a DB write, socket
+        // emits, and possibly a push notification.
+        if (targetReceiverIds.length > 20) {
+            return res.status(400).json({ message: "You can forward to at most 20 recipients at once." });
+        }
+
         if (targetReceiverIds.some((targetId) => targetId === senderId.toString())) {
             return res.status(400).json({ message: "You cannot forward a message to yourself." });
         }
@@ -591,12 +620,14 @@ export async function forwardMessage(req, res) {
 
         for (const targetReceiverId of targetReceiverIds) {
             const receiverSocketIds = getReceiverSocketId(targetReceiverId);
-            const deliveredAt = receiverSocketIds.length > 0 ? new Date() : null;
+            const deliveredAt = (await isUserOnline(targetReceiverId)) ? new Date() : null;
 
             const forwardedMessage = new Message({
                 senderId,
                 receiverId: targetReceiverId,
                 text: originalMessage.text || "",
+                ciphertext: originalMessage.ciphertext || "",
+                iv: originalMessage.iv || "",
                 image: originalMessage.image || "",
                 video: originalMessage.video || "",
                 audio: originalMessage.audio || "",
@@ -623,6 +654,7 @@ export async function forwardMessage(req, res) {
                 sendMessageNotification({ receiverId: targetReceiverId, sender: senderForNotification, message: populatedMessage }).catch((error) => console.error("Forwarded-message push failed:", error.message));
             }
 
+            await invalidateChatCache(senderId, targetReceiverId);
             forwardedMessages.push(presentMessage(populatedMessage));
         }
 
@@ -680,6 +712,11 @@ export const toggleReaction = async (req, res) => {
             return res.status(400).json({ message: "Reaction emoji is required" });
         }
 
+        const cleanEmoji = emoji.trim();
+        if (cleanEmoji.length < 1 || cleanEmoji.length > 16) {
+            return res.status(400).json({ message: "Invalid reaction emoji." });
+        }
+
         const message = await Message.findById(id);
 
         if (!message) {
@@ -694,12 +731,12 @@ export const toggleReaction = async (req, res) => {
             (reaction) => reaction.userId.toString() === userId.toString()
         );
 
-        if (existingReactionIndex >= 0 && message.reactions[existingReactionIndex].emoji === emoji) {
+        if (existingReactionIndex >= 0 && message.reactions[existingReactionIndex].emoji === cleanEmoji) {
             message.reactions.splice(existingReactionIndex, 1);
         } else if (existingReactionIndex >= 0) {
-            message.reactions[existingReactionIndex].emoji = emoji;
+            message.reactions[existingReactionIndex].emoji = cleanEmoji;
         } else {
-            message.reactions.push({ userId, emoji });
+            message.reactions.push({ userId, emoji: cleanEmoji });
         }
 
         await message.save();

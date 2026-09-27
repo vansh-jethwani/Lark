@@ -13,7 +13,7 @@ import { Link } from "react-router";
 import { ConversationRow } from "./ConversationRow";
 import { CallHistory } from "./CallPanel";
 import { CreateGroupModal } from "./CreateGroupModal";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 function getLastMessagePreview(message) {
   if (!message) return "";
@@ -41,7 +41,7 @@ function mapUserForList(user, onlineUsers) {
     peer: {
       name: isGroup ? user.name : user.fullName,
       avatarUrl: user.profilePic,
-      initials: getInitials(user.fullName),
+      initials: getInitials(isGroup ? user.name : user.fullName),
       isOnline: onlineUsers.includes(user._id),
     },
   };
@@ -54,17 +54,9 @@ function ChatSidebar({ width }) {
   const searchUsers = useChatStore((state) => state.searchUsers);
   const searchQuery = useChatStore((state) => state.searchQuery);
   const setSearchQuery = useChatStore((state) => state.setSearchQuery);
-  const setMessageSearchQuery = useChatStore(
-  (state) => state.setMessageSearchQuery
-);
 
   const sidebarTab = useChatStore((state) => state.sidebarTab);
   const setSidebarTab = useChatStore((state) => state.setSidebarTab);
-
-  const setActiveConversationId = useChatStore(
-    (state) => state.setActiveConversationId,
-  );
-  const openDirectChat = useChatStore((state) => state.openDirectChat);
 
   const onlineUsers = useAuthStore((state) => state.onlineUsers);
   const authUser = useAuthStore((state) => state.authUser);
@@ -85,18 +77,23 @@ function ChatSidebar({ width }) {
     return () => window.clearTimeout(timer);
   }, [normalizedSearchQuery, searchUsers]);
 
-  const conversationUsers = conversations.map((user) =>
-    mapUserForList(user, onlineUsers),
+  const conversationUsers = useMemo(
+    () => conversations.map((user) => mapUserForList(user, onlineUsers)),
+    [conversations, onlineUsers],
   );
-  const filteredConversations = normalizedSearchQuery
-    ? conversations
-        .filter((user) =>
-          (user.name || user.fullName || user.username || "")
-            .toLowerCase()
-            .includes(normalizedSearchQuery),
-        )
-        .map((user) => mapUserForList(user, onlineUsers))
-    : conversationUsers;
+  const filteredConversations = useMemo(
+    () =>
+      normalizedSearchQuery
+        ? conversations
+            .filter((user) =>
+              (user.name || user.fullName || user.username || "")
+                .toLowerCase()
+                .includes(normalizedSearchQuery),
+            )
+            .map((user) => mapUserForList(user, onlineUsers))
+        : conversationUsers,
+    [normalizedSearchQuery, conversations, conversationUsers, onlineUsers],
+  );
   const searchResults = useMemo(() => {
     const seen = new Set(
       filteredConversations.map((conversation) => String(conversation.id)),
@@ -108,6 +105,29 @@ function ChatSidebar({ width }) {
         .map((user) => mapUserForList(user, onlineUsers)),
     ];
   }, [filteredConversations, searchedUsers, onlineUsers]);
+
+  // Stable across renders so ConversationRow's memo is not defeated by a new
+  // inline handler on every row. Store state is read via getState(), so the
+  // callback itself never needs to change.
+  const handleSelectConversation = useCallback((conversationId) => {
+    const state = useChatStore.getState();
+    state.setMessageSearchQuery("");
+
+    const remoteUser = state.searchedUsers.find(
+      (user) => String(user._id) === String(conversationId),
+    );
+
+    if (
+      remoteUser &&
+      !state.conversations.some(
+        (item) => String(item._id) === String(conversationId),
+      )
+    ) {
+      state.openDirectChat(remoteUser);
+    } else {
+      state.setActiveConversationId(conversationId);
+    }
+  }, []);
 
   return (
     <aside
@@ -201,24 +221,7 @@ function ChatSidebar({ width }) {
                   key={conversation.id}
                   user={conversation}
                   selected={conversation.id === activeConversationId}
-                  onSelect={() => {
-                    setMessageSearchQuery("");
-
-                    const remoteUser = searchedUsers.find(
-                      (user) => String(user._id) === String(conversation.id),
-                    );
-
-                    if (
-                      remoteUser &&
-                      !conversations.some(
-                        (item) => String(item._id) === String(conversation.id),
-                      )
-                    ) {
-                      openDirectChat(remoteUser);
-                    } else {
-                      setActiveConversationId(conversation.id);
-                    }
-                  }}
+                  onSelect={handleSelectConversation}
                 />
               ),
             )

@@ -13,6 +13,7 @@ import { DeleteMessageModal } from "./DeleteMessageModal";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import { SelectionBar } from "./SelectionBar";
 import { formatMessageDate, getMessageDateKey } from "../../lib/utils";
+import { axiosInstance } from "../../lib/axios";
 import { CallMessage } from "./CallPanel";
 import { mergeCallHistory, readCallHistory } from "../../lib/callHistory";
 import { useAuthStore } from "../../store/useAuthStore";
@@ -33,6 +34,43 @@ export function MessageList() {
   const highlightTimeoutRef = useRef(null);
 
   const typingUsers = useChatStore((state) => state.typingUsers);
+  // For groups, resolve the typing users' display names from the group
+  // members (or the users list) so the indicator reads "A, B are typing…"
+  // instead of a generic "Typing". Returns "" when nobody is typing.
+  const groupTypingLabel = useChatStore((state) => {
+    const conversationId = state.activeConversationId;
+    if (!conversationId) return "";
+    const conversation = state.conversations.find(
+      (item) => String(item._id) === String(conversationId),
+    );
+    if (!conversation || conversation.type !== "group") return "";
+    const typingIds = Object.keys(state.typingUsers).filter(
+      (id) => state.typingUsers[id],
+    );
+    if (typingIds.length === 0) return "";
+    const memberIds = new Set(
+      (conversation.members || []).map((member) => String(member?._id || member)),
+    );
+    const names = typingIds
+      .filter((id) => memberIds.has(String(id)))
+      .map((id) => {
+        const member = (conversation.members || []).find(
+          (m) => String(m?._id || m) === String(id),
+        );
+        const user = state.users.find((u) => String(u._id) === String(id));
+        return (
+          member?.fullName ||
+          user?.fullName ||
+          member?.username ||
+          user?.username ||
+          "Someone"
+        );
+      });
+    if (names.length === 0) return "";
+    if (names.length === 1) return `${names[0]} is typing`;
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
+    return `${names[0]}, ${names[1]} and ${names.length - 2} more are typing`;
+  });
   const deleteMessages = useChatStore((state) => state.deleteMessages);
   const loadOlderMessages = useChatStore((state) => state.loadOlderMessages);
   const hasMoreMessages = useChatStore((state) => state.hasMoreMessages);
@@ -114,6 +152,12 @@ export function MessageList() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isSelectionActive]);
 
+  // Reset the search-result cursor whenever the query changes so
+  // next/previous never jumps using a stale index from the old result set.
+  useEffect(() => {
+    setCurrentSearchIndex(0);
+  }, [normalizedMessageSearchQuery]);
+
   const handleJumpToMessage = (messageId) => {
     if (!messageId) return;
 
@@ -159,14 +203,11 @@ export function MessageList() {
   };
 
   const toggleSelectedMessage = (messageId) => {
-    setSelectedMessageIds((current) => {
-      const next = current.includes(messageId)
-        ? current.filter((id) => id !== messageId)
-        : [...current, messageId];
-
-      if (next.length === 0) setSelectionMode(false);
-      return next;
-    });
+    const next = selectedMessageIds.includes(messageId)
+      ? selectedMessageIds.filter((id) => id !== messageId)
+      : [...selectedMessageIds, messageId];
+    setSelectedMessageIds(next);
+    if (next.length === 0) setSelectionMode(false);
   };
 
   const toggleSelectAll = () => {
@@ -191,7 +232,9 @@ export function MessageList() {
     const callEntries = selectedCalls.filter((call) => call.serverId);
     await Promise.all(callEntries.map((call) => axiosInstance.delete(`/auth/calls/${call.serverId}`).catch(() => null)));
     if (callIds.length) {
-      setCallHistory((current) => current.filter((entry) => !callIds.includes(entry.id)));
+      useChatStore.setState((state) => ({
+        callHistory: state.callHistory.filter((entry) => !callIds.includes(entry.id)),
+      }));
       const localHistory = readCallHistory().filter((entry) => !callIds.includes(entry.id));
       localStorage.setItem("lark-call-history", JSON.stringify(localHistory));
       window.dispatchEvent(new Event("lark:call-history"));
@@ -226,6 +269,10 @@ export function MessageList() {
         <div
           ref={messagesScrollRef}
           onScroll={handleScroll}
+          role="log"
+          aria-live="polite"
+          aria-atomic="false"
+          aria-label="Messages"
           className={`flex flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3 sm:py-4 ${
             isSelectionActive ? "pb-24" : ""
           }`}
@@ -307,7 +354,9 @@ export function MessageList() {
             );
           })}
 
-          {typingUsers?.[activeConversationId] ? (
+          {activeConversation?.isGroup ? (
+            groupTypingLabel ? <TypingIndicator label={groupTypingLabel} /> : null
+          ) : typingUsers?.[activeConversationId] ? (
             <TypingIndicator label="Typing" />
           ) : null}
 

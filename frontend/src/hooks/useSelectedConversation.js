@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useMediaQuery } from "./useMediaQuery";
 import { formatMessageTime } from "../lib/utils";
 import { useChatStore } from "../store/useChatStore";
@@ -64,6 +65,7 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
       pinnedBy: message.pinnedBy,
       deliveredAt: message.deliveredAt,
       readAt: message.readAt,
+      status: message.status,
       reactions: Array.isArray(message.reactions) ? message.reactions : [],
       replyTo,
     };
@@ -100,9 +102,13 @@ export function useSelectedConversation() {
       conversations.find((user) => user._id === activeConversationId)
     : null;
 
-  const activeConversation = selectedUser
-    ? mapUserToConversation({ user: selectedUser, messages, authUser, onlineUsers })
-    : null;
+  const activeConversation = useMemo(
+    () =>
+      selectedUser
+        ? mapUserToConversation({ user: selectedUser, messages, authUser, onlineUsers })
+        : null,
+    [selectedUser, messages, authUser, onlineUsers],
+  );
 
   return {
     activeConversation,

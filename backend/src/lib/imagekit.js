@@ -28,7 +28,7 @@ async function uploadChatMedia(file) {
     responseFields: ["isPrivateFile"],
   });
 
-  return result.filePath;
+  return { filePath: result.filePath, fileId: result.fileId };
 }
 
 function getSignedMediaUrl(filePath, transformation) {

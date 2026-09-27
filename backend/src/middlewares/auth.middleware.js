@@ -19,6 +19,16 @@ export default async function protectRoute(req, res, next){
         return res.status(401).json({message: "Unauthorized"})
        }
 
+       // Tokens issued before a password change/reset carry a stale version.
+       // Tokens minted before this check existed carry no version and are
+       // allowed to age out naturally.
+       if (
+        typeof decoded.tokenVersion === "number" &&
+        user.tokenVersion !== decoded.tokenVersion
+       ){
+        return res.status(401).json({message: "Unauthorized"})
+       }
+
        req.user = user
        req.userId = user._id
        next()

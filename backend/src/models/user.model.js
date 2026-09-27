@@ -62,6 +62,13 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // Bumped on every password change/reset. JWTs embed the version they were
+    // issued with; a mismatch means the token was issued before the change and
+    // must be rejected.
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true }, // createdAt & updatedAt
 );

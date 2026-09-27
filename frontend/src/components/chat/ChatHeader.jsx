@@ -179,7 +179,7 @@ export function ChatHeader() {
             isIconOnly
             className="shrink-0"
             aria-label="Close chat"
-            onPress={() => setSearchOpen(true)}
+            onPress={() => setActiveConversationId(null)}
           >
             <XIcon className="size-5.5" strokeWidth={2} aria-hidden />
           </Button>

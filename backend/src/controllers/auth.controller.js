@@ -47,12 +47,12 @@ function normalizeUsername(username) {
     return String(username || "").trim().toLowerCase().replace(/^@+/, "");
 }
 
-function setTokenCookie(res, userId) {
+function setTokenCookie(res, userId, tokenVersion = 0) {
     if (!process.env.JWT_SECRET) {
         throw new Error("JWT_SECRET is not configured");
     }
 
-    const token = jwt.sign({ userId }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ userId, tokenVersion }, process.env.JWT_SECRET, {
         expiresIn: "7d",
     });
 
@@ -228,7 +228,7 @@ export async function verifyEmailOtp(req, res) {
             publicKey: initPubKeyBase64,
         });
         await PendingEmailVerification.deleteOne({ _id: pending._id });
-        setTokenCookie(res, user._id);
+        setTokenCookie(res, user._id, user.tokenVersion);
         return res.status(201).json(serializeUser(user));
     } catch (error) {
         console.log("Error in email verification:", error.message);
@@ -281,7 +281,7 @@ export async function login(req, res) {
             return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        setTokenCookie(res, user._id);
+        setTokenCookie(res, user._id, user.tokenVersion);
 
         res.status(200).json(serializeUser(user));
     } catch (error) {
@@ -389,6 +389,9 @@ export async function resetPassword(req, res) {
         if (!user) return res.status(404).json({ message: 'User not found' });
         
         user.password = await bcrypt.hash(password, 12);
+        // Revoke every other session: JWTs embed tokenVersion, so bumping it
+        // invalidates tokens issued before this reset.
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
         await user.save();
         
         await PasswordResetOtp.deleteOne({ _id: pending._id });
@@ -409,10 +412,19 @@ export async function resetPassword(req, res) {
 export async function updatePublicKey(req, res) {
     try {
         const { publicKey } = req.body;
-        if (!publicKey) return res.status(400).json({ message: 'Public key is required' });
-        
+        // P-256 SPKI keys are base64; bound the shape so arbitrary blobs can't
+        // be published for other clients to fetch and import.
+        if (
+            typeof publicKey !== "string" ||
+            publicKey.length < 1 ||
+            publicKey.length > 2000 ||
+            !/^[A-Za-z0-9+/=_-]+$/.test(publicKey)
+        ) {
+            return res.status(400).json({ message: "Invalid public key." });
+        }
+
         await User.findByIdAndUpdate(req.userId, { publicKey });
-        return res.status(200).json({ message: 'Public key updated' });
+        return res.status(200).json({ message: "Public key updated" });
     } catch (error) {
         console.log('Error in updatePublicKey:', error.message);
         return res.status(500).json({ message: 'Internal server error' });

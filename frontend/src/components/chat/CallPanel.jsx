@@ -43,6 +43,22 @@ import {
 import { axiosInstance } from "../../lib/axios";
 
 const STUN = "stun:stun.l.google.com:19302";
+
+// TURN is required for calls behind symmetric NATs (common on mobile data);
+// STUN alone will fail there. Configure with VITE_TURN_URL,
+// VITE_TURN_USERNAME and VITE_TURN_CREDENTIAL.
+function buildIceServers() {
+  const servers = [{ urls: STUN }];
+  const turnUrl = import.meta.env.VITE_TURN_URL;
+  if (turnUrl) {
+    servers.push({
+      urls: turnUrl,
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
+    });
+  }
+  return servers;
+}
 const constraints = (type, facingMode = "user") => ({
   audio: {
     echoCancellation: { ideal: true },
@@ -81,6 +97,49 @@ async function tuneSender(sender) {
 const debug = (...args) => {
   if (import.meta.env.DEV) console.debug("[WEBRTC]", ...args);
 };
+
+// Owns the 1-second call-duration tick so the large CallPanel component does
+// not re-render every second during a call. The elapsed time is mirrored into
+// secondsRef so finish() can record the call duration.
+function CallTimer({ secondsRef }) {
+  const [seconds, setSeconds] = useState(() => secondsRef?.current || 0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSeconds((value) => {
+        const next = value + 1;
+        if (secondsRef) secondsRef.current = next;
+        return next;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [secondsRef]);
+
+  return <>{formatCallDuration(seconds)}</>;
+}
+
+function CallStatusLabel({ call, secondsRef }) {
+  if (!call) return null;
+  switch (call.status) {
+    case "calling":
+      return "Calling...";
+    case "ringing":
+      return call.incoming ? "Incoming call..." : "Ringing...";
+    case "connecting":
+      return "Connecting...";
+    case "reconnecting":
+      return "Reconnecting...";
+    case "connected":
+      return (
+        <>
+          {call.type === "video" ? "Video call" : "Voice call"} ·{" "}
+          <CallTimer secondsRef={secondsRef} />
+        </>
+      );
+    default:
+      return "Call in progress";
+  }
+}
 
 export function CallHistory() {
   const users = useChatStore((state) => state.users);
@@ -539,7 +598,6 @@ export function CallPanel() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [swappedVideo, setSwappedVideo] = useState(false);
   const [statusText, setStatusText] = useState("");
-  const [seconds, setSeconds] = useState(0);
 
   const secondsRef = useRef(0);
   const callRef = useRef(null);
@@ -590,7 +648,7 @@ export function CallPanel() {
 
   const createPeer = (peer) => {
     const connection = new RTCPeerConnection({
-      iceServers: [{ urls: STUN }],
+      iceServers: buildIceServers(),
       iceCandidatePoolSize: 4,
       bundlePolicy: "max-bundle",
     });
@@ -623,6 +681,7 @@ export function CallPanel() {
         setCurrentCall({ ...callRef.current, status: "reconnecting" });
       } else if (connection.connectionState === "failed") {
         setStatusText("Connection lost. Please try the call again.");
+        finish("failed");
       }
     };
 
@@ -667,7 +726,6 @@ export function CallPanel() {
     setMinimized(false);
     setMaximized(false);
     secondsRef.current = 0;
-    setSeconds(0);
     setMuted(false);
     setCameraOff(false);
     setIsScreenSharing(false);
@@ -791,6 +849,14 @@ export function CallPanel() {
       }
     };
 
+    // Server emits this when a ringing call times out unanswered.
+    const missed = ({ callId }) => {
+      if (callRef.current?.id === callId) {
+        setStatusText("No answer.");
+        finish("missed");
+      }
+    };
+
     socket.on("call:ring", invite);
     socket.on("call:ringing", ringing);
     socket.on("call:accept", accepted);
@@ -798,6 +864,7 @@ export function CallPanel() {
     socket.on("call:end", ended);
     socket.on("call:signal", signal);
     socket.on("call:failed", failed);
+    socket.on("call:missed", missed);
 
     return () => {
       socket.off("call:ring", invite);
@@ -807,21 +874,10 @@ export function CallPanel() {
       socket.off("call:end", ended);
       socket.off("call:signal", signal);
       socket.off("call:failed", failed);
+      socket.off("call:missed", missed);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, users]);
-
-  useEffect(() => {
-    if (call?.status !== "connected") return undefined;
-    const timer = window.setInterval(() => {
-      setSeconds((value) => {
-        const next = value + 1;
-        secondsRef.current = next;
-        return next;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [call?.status]);
 
   useEffect(() => {
     if (call?.status !== "calling" && call?.status !== "ringing") return undefined;
@@ -1010,24 +1066,6 @@ export function CallPanel() {
     setMaximized((value) => !value);
   };
 
-  const statusSubtext = useMemo(() => {
-    if (!call) return "";
-    switch (call.status) {
-      case "calling":
-        return "Calling...";
-      case "ringing":
-        return call.incoming ? "Incoming call..." : "Ringing...";
-      case "connecting":
-        return "Connecting...";
-      case "reconnecting":
-        return "Reconnecting...";
-      case "connected":
-        return `${call.type === "video" ? "Video call" : "Voice call"} · ${formatCallDuration(seconds)}`;
-      default:
-        return "Call in progress";
-    }
-  }, [call, seconds]);
-
   if (!call) {
     return statusText ? (
       <div className="fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-full bg-danger/90 px-4 py-3 text-sm text-white shadow-2xl backdrop-blur-md">
@@ -1076,7 +1114,7 @@ export function CallPanel() {
 
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-semibold text-white">{call.peer.name}</p>
-            <p className="text-[11px] text-zinc-400">{statusSubtext}</p>
+            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
           </div>
 
           <div className="flex items-center gap-1.5 border-l border-white/10 pl-2">
@@ -1139,7 +1177,7 @@ export function CallPanel() {
                     </span>
                   </div>
                   <p className="flex items-center gap-1.5 text-xs text-zinc-300/90 font-medium">
-                    {statusSubtext}
+                    <CallStatusLabel call={call} secondsRef={secondsRef} />
                   </p>
                 </div>
               </div>
@@ -1194,7 +1232,7 @@ export function CallPanel() {
                         </Avatar>
                       </div>
                       <p className="text-sm font-medium text-zinc-400">
-                        {call.status === "connected" ? "Camera is off" : statusSubtext}
+                        {call.status === "connected" ? "Camera is off" : <CallStatusLabel call={call} secondsRef={secondsRef} />}
                       </p>
                     </div>
                   )}
@@ -1252,7 +1290,7 @@ export function CallPanel() {
 
                   <div className="space-y-2">
                     <h3 className="text-2xl font-bold text-white tracking-tight">{call.peer.name}</h3>
-                    <p className="text-sm font-medium text-emerald-400/90">{statusSubtext}</p>
+                    <p className="text-sm font-medium text-emerald-400/90"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
                     <div className="flex items-center justify-center gap-1.5 text-xs text-zinc-400 pt-1">
                       <ShieldCheckIcon className="size-3.5 text-emerald-400" />
                       <span>End-to-end encrypted voice call</span>
