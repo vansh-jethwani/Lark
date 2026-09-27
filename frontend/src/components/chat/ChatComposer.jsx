@@ -28,6 +28,7 @@ export function ChatComposer() {
   const sendTypingStatus = useChatStore((state) => state.sendTypingStatus);
   const typingTimeoutRef = useRef(null);
   const typingThrottleRef = useRef(0);
+  const isSendingRef = useRef(false);
   const replyingTo = useChatStore((state) => state.replyingTo);
   const clearReplyingTo = useChatStore((state) => state.clearReplyingTo);
   const selectedGroup = useChatStore((state) => state.conversations.find((item) => String(item._id) === String(activeConversationId)));
@@ -53,8 +54,16 @@ export function ChatComposer() {
   }, []);
 
   const handleSend = async () => {
-    sendTypingStatus(activeConversationId, false);
-    await sendTextMessage(activeConversationId);
+    // Synchronous guard: a fast double-Enter must not fire a second send
+    // while the first one is still in flight.
+    if (isSendingRef.current) return;
+    isSendingRef.current = true;
+    try {
+      sendTypingStatus(activeConversationId, false);
+      await sendTextMessage(activeConversationId);
+    } finally {
+      isSendingRef.current = false;
+    }
   };
 
   const handleComposerTextChange = (event) => {
@@ -152,6 +161,7 @@ export function ChatComposer() {
         <Button
           variant="ghost"
           isIconOnly
+          aria-label="Attach media"
           isDisabled={isSendingMedia || groupSendRestricted}
           className="mb-1 size-9 shrink-0 touch-manipulation self-end text-accent"
           onPress={() => mediaInputRef.current?.click()}
@@ -169,6 +179,7 @@ export function ChatComposer() {
           onChange={handleComposerTextChange}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
+              if (event.repeat) return;
               event.preventDefault();
               handleSend();
             }
@@ -181,6 +192,7 @@ export function ChatComposer() {
           <Button
             variant="primary"
             isIconOnly
+            aria-label="Send message"
             isDisabled={!composerText.trim() || groupSendRestricted}
             className="mb-1 size-10 shrink-0 self-end rounded-full"
             onPress={handleSend}
@@ -191,6 +203,7 @@ export function ChatComposer() {
           <Button
             variant={isRecordingVoice ? "primary" : "ghost"}
             isIconOnly
+            aria-label="Record voice message"
             isDisabled={isSendingMedia || groupSendRestricted}
             className="mb-1 size-10 shrink-0 self-end rounded-full"
             onPress={handleVoiceRecord}

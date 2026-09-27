@@ -6,6 +6,7 @@ import {
   Minimize2Icon,
   MicIcon,
   MicOffIcon,
+  MessageCircleIcon,
   PhoneIcon,
   PhoneIncomingIcon,
   PhoneOutgoingIcon,
@@ -14,7 +15,6 @@ import {
   VideoIcon,
   VideoOffIcon,
   Volume2Icon,
-  VolumeXIcon,
   XIcon,
   MinusIcon,
   RefreshCwIcon,
@@ -70,8 +70,9 @@ const constraints = (type, facingMode = "user") => ({
   },
   video: type === "video" ? {
     facingMode: { ideal: facingMode },
-    width: { ideal: 1920, max: 1920 },
-    height: { ideal: 1080, max: 1080 },
+    width: { ideal: 1280, max: 1920 },
+    height: { ideal: 720, max: 1080 },
+
     frameRate: { ideal: 30, max: 30 },
   } : false,
 });
@@ -93,6 +94,23 @@ async function tuneSender(sender) {
     /* Browsers that do not support bitrate tuning will use standard settings */
   }
 }
+
+// Tune the Opus audio codec for voice calls: in-band forward error correction
+// hides packet loss (fewer robotic dropouts on weak networks) and DTX stops
+// transmitting during silence (less mobile data used). Applied to offer/answer SDP.
+function tuneOpusSdp(description) {
+  if (!description || typeof description.sdp !== "string") return description;
+  const opusMatch = description.sdp.match(/a=rtpmap:(\d+) opus\/48000/i);
+  if (!opusMatch) return description;
+  const payload = opusMatch[1];
+  const sdp = description.sdp.replace(
+    new RegExp(`a=fmtp:${payload} ([^\r\n]*)`),
+    (line, params) =>
+      /useinbandfec=1/.test(params) ? line : `a=fmtp:${payload} ${params};useinbandfec=1;usedtx=1`,
+  );
+  return { type: description.type, sdp };
+}
+
 
 const debug = (...args) => {
   if (import.meta.env.DEV) console.debug("[WEBRTC]", ...args);
@@ -220,9 +238,8 @@ export function CallHistory() {
                     {group.entries.length > 1 ? ` (${group.entries.length})` : ""}
                   </span>
                   <span
-                    className={`mt-0.5 flex items-center gap-1 truncate text-xs ${
-                      isUnsuccessful(latest) ? "text-danger" : "text-muted"
-                    }`}
+                    className={`mt-0.5 flex items-center gap-1 truncate text-xs ${isUnsuccessful(latest) ? "text-danger" : "text-muted"
+                      }`}
                   >
                     <CallDirectionIcon entry={latest} />
                     {dateTimeLabel(latest.createdAt)}
@@ -231,12 +248,11 @@ export function CallHistory() {
                 <CallActionButton entry={latest} />
               </button>
               {expanded ? (
-                <div className="space-y-3 border-t border-border/50 bg-surface/30 px-14 py-3 sm:px-16">
-                  {group.entries.map((entry) => (
-                    <CallHistoryDetail key={entry.id} entry={entry} />
-                  ))}
+                <div className="border-t border-border/50 bg-surface/30">
+                  <CallQuickActions group={group} />
                 </div>
               ) : null}
+
             </div>
           );
         })
@@ -274,6 +290,102 @@ function CallActionButton({ entry }) {
     </span>
   );
 }
+
+// Expanded call-log rows get three labeled round action buttons:
+// open the chat, start an audio call, or start a video call.
+function CallQuickActions({ group }) {
+  const peerName = group.latest?.peerName || "user";
+
+  // Prefer the full user record the store already knows (username, email,
+  // type, real avatar). Falls back to a minimal shell for peers that have
+  // no conversation yet.
+  const resolvePeer = () => {
+    const state = useChatStore.getState();
+    const peerId = String(group.peerId || "");
+    const fullUser =
+      state.users.find((item) => String(item._id) === String(peerId)) ||
+      state.conversations.find((item) => String(item._id) === String(peerId)) ||
+      null;
+    return (
+      fullUser || {
+        _id: peerId,
+        fullName: peerName === "user" ? "Unknown user" : peerName,
+        username: "",
+        profilePic: group.latest?.peerAvatar || "",
+        type: "direct",
+      }
+    );
+  };
+
+  const openChat = () => {
+    if (!group.peerId) return;
+    const state = useChatStore.getState();
+    const peer = resolvePeer();
+    state.setMessageSearchQuery("");
+    // Exactly the same path as tapping the conversation row in the Chats tab:
+    // jump straight in when the conversation exists, otherwise seed it first.
+    if (state.conversations.some((item) => String(item._id) === String(peer._id))) {
+      state.setActiveConversationId(peer._id);
+    } else {
+      state.openDirectChat(peer);
+    }
+    state.setSidebarTab("chats");
+  };
+
+  const startCall = (type) => {
+    const peer = resolvePeer();
+    window.dispatchEvent(
+      new CustomEvent("lark:start-call", { detail: { type, user: peer } })
+    );
+  };
+
+  const buttons = [
+    {
+      key: "chat",
+      label: "Chat",
+      onClick: openChat,
+      className: "bg-accent text-accent-foreground",
+      icon: <MessageCircleIcon className="size-5" />,
+      ariaLabel: `Chat with ${peerName}`,
+    },
+    {
+      key: "audio",
+      label: "Audio call",
+      onClick: () => startCall("audio"),
+      className: "bg-emerald-500 text-white",
+      icon: <PhoneIcon className="size-5" />,
+      ariaLabel: `Audio call ${peerName}`,
+    },
+    {
+      key: "video",
+      label: "Video call",
+      onClick: () => startCall("video"),
+      className: "bg-violet-500 text-white",
+      icon: <VideoIcon className="size-5" />,
+      ariaLabel: `Video call ${peerName}`,
+    },
+  ];
+
+  return (
+    <div className="flex items-center justify-around px-6 py-3">
+      {buttons.map((button) => (
+        <span key={button.key} className="flex flex-col items-center gap-1">
+          <button
+            type="button"
+            onClick={button.onClick}
+            aria-label={button.ariaLabel}
+            title={button.label}
+            className={`grid size-12 place-items-center rounded-full shadow-md transition-transform hover:scale-105 active:scale-95 ${button.className}`}
+          >
+            {button.icon}
+          </button>
+          <span className="text-[11px] font-medium text-muted">{button.label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 
 function CallUserSearchRow({ user }) {
   const startCall = (type) =>
@@ -444,26 +556,25 @@ function CallHistoryDetail({
   const iconTone = unsuccessful
     ? "text-danger"
     : outgoing
-    ? "text-accent-foreground"
-    : "text-foreground";
+      ? "text-accent-foreground"
+      : "text-foreground";
   const detailTone = unsuccessful
     ? "text-danger"
     : outgoing
-    ? "text-accent-foreground/85"
-    : "text-muted";
+      ? "text-accent-foreground/85"
+      : "text-muted";
   const hasDuration = status === "Completed" && entry.duration;
   const metadataLabel = hasDuration ? "Duration" : status;
   const metadataValue = hasDuration ? formatCallDuration(entry.duration) : null;
 
   return (
     <div
-      className={`relative flex w-full py-0.5 ${
-        inChat
+      className={`relative flex w-full py-0.5 ${inChat
           ? entry.direction === "outgoing"
             ? "justify-end"
             : "justify-start"
           : "justify-center"
-      } ${selected ? "rounded-xl bg-accent/10" : ""}`}
+        } ${selected ? "rounded-xl bg-accent/10" : ""}`}
       onClick={handleClick}
       onPointerDown={startHold}
       onPointerUp={clearHold}
@@ -471,18 +582,16 @@ function CallHistoryDetail({
       onContextMenu={showMenu}
     >
       <div
-        className={`flex w-fit max-w-[min(90%,28rem)] items-start gap-2.5 rounded-2xl px-3 py-2.5 text-xs shadow-sm sm:max-w-[min(75%,28rem)] ${
-          outgoing
+        className={`flex w-fit max-w-[min(90%,28rem)] items-start gap-2.5 rounded-2xl px-3 py-2.5 text-xs shadow-sm sm:max-w-[min(75%,28rem)] ${outgoing
             ? "rounded-br-md bg-accent text-accent-foreground"
             : "rounded-bl-md bg-surface"
-        }`}
+          }`}
       >
         <CombinedCallIcon entry={entry} className={iconTone} />
         <span className="min-w-0">
           <span
-            className={`block break-words text-[13px] font-semibold leading-5 ${
-              outgoing ? "text-accent-foreground" : "text-foreground"
-            }`}
+            className={`block break-words text-[13px] font-semibold leading-5 ${outgoing ? "text-accent-foreground" : "text-foreground"
+              }`}
           >
             {callDescription(entry)}
           </span>
@@ -598,9 +707,14 @@ export function CallPanel() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [swappedVideo, setSwappedVideo] = useState(false);
   const [statusText, setStatusText] = useState("");
+  // Fix #10: interim "Starting call…" UI shown while getUserMedia resolves.
+  const [isStartingCall, setIsStartingCall] = useState(false);
 
   const secondsRef = useRef(0);
   const callRef = useRef(null);
+  // Fix #3/#4: synchronous double-tap guards for startCall and accept.
+  const startingRef = useRef(false);
+  const acceptingRef = useRef(false);
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -716,6 +830,9 @@ export function CallPanel() {
       ringAudioRef.current.currentTime = 0;
     }
 
+    // Fix #22: stop any ongoing call vibration when the call ends.
+    navigator.vibrate?.(0);
+
     candidateQueueRef.current = [];
     localStreamRef.current = null;
     remoteStreamRef.current = null;
@@ -733,7 +850,10 @@ export function CallPanel() {
   };
 
   const startCall = async (user, type) => {
-    if (callRef.current || !socket) return;
+    // Fix #3: guard includes a synchronous ref flag so a second rapid tap
+    // is rejected before the async getUserMedia below can resolve.
+    if (callRef.current || startingRef.current || !socket) return;
+    startingRef.current = true;
     const peer = {
       id: user._id,
       name: user.fullName,
@@ -741,6 +861,8 @@ export function CallPanel() {
       initials: getInitials(user.fullName),
     };
     const callId = crypto.randomUUID();
+    // Fix #10: immediate feedback while media permissions are pending.
+    setIsStartingCall(true);
 
     try {
       localStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints(type));
@@ -756,6 +878,9 @@ export function CallPanel() {
     } catch (error) {
       showMediaError(error);
       finish("failed");
+    } finally {
+      startingRef.current = false;
+      setIsStartingCall(false);
     }
   };
 
@@ -784,6 +909,8 @@ export function CallPanel() {
         incoming: true,
       });
       socket.emit("call:ringing", { receiverId: callerId, callId });
+      // Fix #22: buzz the device while an incoming call is ringing.
+      navigator.vibrate?.([200, 100, 200]);
     };
 
     const ringing = ({ userId, callId }) => {
@@ -798,7 +925,7 @@ export function CallPanel() {
       setCurrentCall({ ...callRef.current, status: "connecting" });
       const connection = peerRef.current || createPeer(callRef.current.peer);
       const offer = await connection.createOffer();
-      await connection.setLocalDescription(offer);
+      await connection.setLocalDescription(tuneOpusSdp(offer));
       socket.emit("call:signal", {
         receiverId: userId,
         callId,
@@ -820,7 +947,7 @@ export function CallPanel() {
         await flushCandidates(connection);
         if (payload.description.type === "offer") {
           const answer = await connection.createAnswer();
-          await connection.setLocalDescription(answer);
+          await connection.setLocalDescription(tuneOpusSdp(answer));
           socket.emit("call:signal", {
             receiverId: userId,
             callId,
@@ -882,7 +1009,7 @@ export function CallPanel() {
   useEffect(() => {
     if (call?.status !== "calling" && call?.status !== "ringing") return undefined;
     const audio = ringAudioRef.current;
-    audio?.play().catch(() => {});
+    audio?.play().catch(() => { });
     return () => {
       if (audio) {
         audio.pause();
@@ -897,7 +1024,19 @@ export function CallPanel() {
     }
   }, [call, isScreenSharing]);
 
+  // Fix #21: auto-dismiss the call error banner after ~5s.
+  useEffect(() => {
+    if (!statusText) return undefined;
+    const timer = window.setTimeout(() => setStatusText(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [statusText]);
+
   const accept = async () => {
+    // Fix #4: ignore double-taps while an accept is already in flight.
+    if (acceptingRef.current) return;
+    acceptingRef.current = true;
+    // Fix #22: stop the incoming-ring vibration on accept.
+    navigator.vibrate?.(0);
     try {
       localStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints(call.type));
       createPeer(call.peer);
@@ -905,6 +1044,8 @@ export function CallPanel() {
       setCurrentCall({ ...callRef.current, status: "connecting", incoming: false });
     } catch (error) {
       showMediaError(error);
+    } finally {
+      acceptingRef.current = false;
     }
   };
 
@@ -920,6 +1061,8 @@ export function CallPanel() {
         initials: getInitials(pendingCall.caller.fullName),
       };
       if (action === "decline") {
+        // Fix #22: stop the incoming-ring vibration on decline.
+        navigator.vibrate?.(0);
         socket.emit("call:reject", { receiverId: peer.id, callId: pendingCall.callId });
         return;
       }
@@ -1001,7 +1144,7 @@ export function CallPanel() {
       setFacingMode(nextFacingMode);
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = nextStream;
-        await localVideoRef.current.play().catch(() => {});
+        await localVideoRef.current.play().catch(() => { });
       }
     } catch {
       stream?.getTracks().forEach((track) => track.stop());
@@ -1067,6 +1210,15 @@ export function CallPanel() {
   };
 
   if (!call) {
+    // Fix #10: interim feedback while media permissions are pending.
+    if (isStartingCall) {
+      return (
+        <div className="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2.5 rounded-full bg-zinc-900/95 px-4 py-2.5 text-sm font-medium text-white shadow-2xl backdrop-blur-md">
+          <span className="size-2.5 animate-pulse rounded-full bg-emerald-500" aria-hidden="true" />
+          Starting call…
+        </div>
+      );
+    }
     return statusText ? (
       <div className="fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-full bg-danger/90 px-4 py-3 text-sm text-white shadow-2xl backdrop-blur-md">
         <span>{statusText}</span>
@@ -1081,6 +1233,10 @@ export function CallPanel() {
       </div>
     ) : null;
   }
+
+  // Fix #16: incoming ringing calls get a compact banner (same pattern as the
+  // minimized widget); the full-screen viewport is reserved for active calls.
+  const incomingRinging = call.status === "ringing" && call.incoming;
 
   return (
     <>
@@ -1099,7 +1255,39 @@ export function CallPanel() {
         </div>
       ) : null}
 
-      {minimized ? (
+      {incomingRinging ? (
+        /* Fix #16: compact incoming-call banner (no full-screen takeover) */
+        <div className="fixed bottom-5 right-5 z-[60] flex items-center gap-3 rounded-full border border-white/10 bg-zinc-900/95 p-2 pr-4 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-5">
+          <Avatar className="size-11 ring-2 ring-emerald-500/50">
+            <Avatar.Image alt={call.peer.name} src={call.peer.avatar} />
+            <Avatar.Fallback>{call.peer.initials}</Avatar.Fallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold text-white">{call.peer.name}</p>
+            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
+          </div>
+          <div className="flex items-center gap-1.5 border-l border-white/10 pl-2">
+            <Button
+              isIconOnly
+              size="sm"
+              className="size-10 rounded-full bg-emerald-600 text-white hover:bg-emerald-500"
+              onPress={accept}
+              aria-label="Accept call"
+            >
+              <PhoneIcon className="size-4" />
+            </Button>
+            <Button
+              isIconOnly
+              size="sm"
+              className="size-10 rounded-full bg-red-600 text-white hover:bg-red-700"
+              onPress={() => end("rejected")}
+              aria-label="Decline call"
+            >
+              <PhoneOffIcon className="size-4" />
+            </Button>
+          </div>
+        </div>
+      ) : minimized ? (
         /* WhatsApp-style Floating Minimized Widget */
         <div className="fixed bottom-5 right-5 z-[60] flex items-center gap-3 rounded-full border border-white/10 bg-zinc-900/95 p-2 pr-4 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-5">
           <div className="relative">
@@ -1122,7 +1310,7 @@ export function CallPanel() {
               isIconOnly
               size="sm"
               variant="ghost"
-              className="size-8 rounded-full text-zinc-300 hover:bg-white/10"
+              className="size-10 rounded-full text-zinc-300 hover:bg-white/10"
               onPress={toggleMute}
               aria-label="Toggle Mute"
             >
@@ -1132,7 +1320,7 @@ export function CallPanel() {
               isIconOnly
               size="sm"
               variant="ghost"
-              className="size-8 rounded-full text-zinc-300 hover:bg-white/10"
+              className="size-10 rounded-full text-zinc-300 hover:bg-white/10"
               onPress={() => setMinimized(false)}
               aria-label="Maximize Call"
             >
@@ -1141,7 +1329,7 @@ export function CallPanel() {
             <Button
               isIconOnly
               size="sm"
-              className="size-8 rounded-full bg-red-600 text-white hover:bg-red-700"
+              className="size-10 rounded-full bg-red-600 text-white hover:bg-red-700"
               onPress={() => end()}
               aria-label="End Call"
             >
@@ -1152,15 +1340,13 @@ export function CallPanel() {
       ) : (
         /* Full Calling Viewport (Mobile Native App + Desktop responsive WhatsApp styling) */
         <div
-          className={`fixed inset-0 z-[60] flex flex-col justify-between bg-zinc-950 text-white font-sans ${
-            maximized ? "p-0" : "sm:p-4 sm:bg-black/80 sm:backdrop-blur-md"
-          }`}
+          className={`fixed inset-0 z-[60] flex flex-col justify-between bg-zinc-950 text-white font-sans ${maximized ? "p-0" : "sm:p-4 sm:bg-black/80 sm:backdrop-blur-md"
+            }`}
         >
           <div
             ref={callWindowRef}
-            className={`relative flex size-full flex-col overflow-hidden bg-gradient-to-b from-zinc-900 via-zinc-950 to-black ${
-              maximized ? "rounded-none" : "sm:max-w-5xl sm:max-h-[92dvh] sm:mx-auto sm:rounded-3xl sm:border sm:border-white/10 sm:shadow-2xl"
-            }`}
+            className={`relative flex size-full flex-col overflow-hidden bg-gradient-to-b from-zinc-900 via-zinc-950 to-black ${maximized ? "rounded-none" : "sm:max-w-5xl sm:max-h-[92dvh] sm:mx-auto sm:rounded-3xl sm:border sm:border-white/10 sm:shadow-2xl"
+              }`}
           >
             {/* Top WhatsApp Style Navigation Bar */}
             <div className="absolute top-0 inset-x-0 z-30 flex items-center justify-between bg-gradient-to-b from-black/80 via-black/40 to-transparent px-4 py-4 sm:px-6">
@@ -1188,7 +1374,7 @@ export function CallPanel() {
                   isIconOnly
                   size="sm"
                   variant="ghost"
-                  className="size-8 rounded-full text-zinc-300 hover:bg-white/10"
+                  className="size-10 rounded-full text-zinc-300 hover:bg-white/10"
                   aria-label="Minimize Call"
                   onPress={() => setMinimized(true)}
                 >
@@ -1198,7 +1384,7 @@ export function CallPanel() {
                   isIconOnly
                   size="sm"
                   variant="ghost"
-                  className="size-8 rounded-full text-zinc-300 hover:bg-white/10"
+                  className="size-10 rounded-full text-zinc-300 hover:bg-white/10"
                   aria-label="Fullscreen Toggle"
                   onPress={toggleFullscreen}
                 >
@@ -1217,7 +1403,7 @@ export function CallPanel() {
                     ref={remoteVideoRef}
                     autoPlay
                     playsInline
-                    className={`size-full ${swappedVideo ? "object-cover scale-x-[-1]" : "object-cover"}`}
+                    className={`size-full ${swappedVideo ? "object-contain scale-x-[-1]" : "object-contain"}`}
                   />
 
                   {/* Remote Camera Disabled / Audio Only Fallback */}
@@ -1248,9 +1434,8 @@ export function CallPanel() {
                       autoPlay
                       muted
                       playsInline
-                      className={`size-full object-cover ${isScreenSharing ? "" : "scale-x-[-1]"} ${
-                        cameraOff ? "hidden" : "block"
-                      }`}
+                      className={`size-full object-cover ${isScreenSharing ? "" : "scale-x-[-1]"} ${cameraOff ? "hidden" : "block"
+                        }`}
                     />
                     {cameraOff && (
                       <div className="flex size-full flex-col items-center justify-center bg-zinc-800 p-2">
@@ -1314,116 +1499,95 @@ export function CallPanel() {
 
             {/* Bottom Floating Control Bar (WhatsApp Mobile/Web Floating Dock) */}
             <div className="shrink-0 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-3 px-4 flex justify-center bg-gradient-to-t from-black via-zinc-950/80 to-transparent z-30">
-              {call.incoming && call.status === "ringing" ? (
-                /* Incoming Call Accept / Reject dock */
-                <div className="flex items-center gap-6 bg-zinc-900/90 border border-white/10 px-8 py-3.5 rounded-full shadow-2xl backdrop-blur-2xl">
-                  <Button
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-full px-6 py-3 shadow-lg hover:scale-105 active:scale-95 transition-all"
-                    onPress={accept}
-                  >
-                    <PhoneIcon className="size-5 fill-current" />
-                    Accept
-                  </Button>
-                  <Button
-                    className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-full px-6 py-3 shadow-lg hover:scale-105 active:scale-95 transition-all"
-                    onPress={() => end("rejected")}
-                  >
-                    <PhoneOffIcon className="size-5" />
-                    Decline
-                  </Button>
-                </div>
-              ) : (
-                /* Connected / Calling Action Bar */
-                <div className="flex items-center gap-3 sm:gap-4 bg-zinc-900/90 border border-white/10 px-4 sm:px-6 py-3 rounded-full shadow-2xl backdrop-blur-2xl">
-                  {/* Audio Mute */}
-                  <Button
-                    isIconOnly
-                    className={`size-12 sm:size-13 rounded-full transition-all ${
-                      muted ? "bg-red-600/90 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
+              {/* Connected / Calling Action Bar
+                  (incoming ringing renders the compact banner instead) */}
+              <div className="flex items-center gap-3 sm:gap-4 bg-zinc-900/90 border border-white/10 px-4 sm:px-6 py-3 rounded-full shadow-2xl backdrop-blur-2xl">
+                {/* Audio Mute */}
+                <Button
+                  isIconOnly
+                  className={`size-12 sm:size-13 rounded-full transition-all ${muted ? "bg-red-600/90 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
                     }`}
-                    aria-label="Mute microphone"
-                    onPress={toggleMute}
-                  >
-                    {muted ? <MicOffIcon className="size-5" /> : <MicIcon className="size-5" />}
-                  </Button>
+                  aria-label="Mute microphone"
+                  onPress={toggleMute}
+                >
+                  {muted ? <MicOffIcon className="size-5" /> : <MicIcon className="size-5" />}
+                </Button>
 
-                  {/* Video Toggle (If Video Call) */}
-                  {call.type === "video" && (
-                    <>
-                      <Button
-                        isIconOnly
-                        className={`size-12 sm:size-13 rounded-full transition-all ${
-                          cameraOff ? "bg-red-600/90 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
+                {/* Video Toggle (If Video Call) */}
+                {call.type === "video" && (
+                  <>
+                    <Button
+                      isIconOnly
+                      className={`size-12 sm:size-13 rounded-full transition-all ${cameraOff ? "bg-red-600/90 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
                         }`}
-                        aria-label="Toggle camera"
-                        onPress={toggleCamera}
-                      >
-                        {cameraOff ? <VideoOffIcon className="size-5" /> : <VideoIcon className="size-5" />}
-                      </Button>
+                      aria-label="Toggle camera"
+                      onPress={toggleCamera}
+                    >
+                      {cameraOff ? <VideoOffIcon className="size-5" /> : <VideoIcon className="size-5" />}
+                    </Button>
 
-                      <Button
-                        isIconOnly
-                        className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all hidden sm:flex"
-                        aria-label="Flip camera"
-                        onPress={switchCamera}
-                      >
-                        <RefreshCwIcon className="size-5" />
-                      </Button>
+                    <Button
+                      isIconOnly
+                      className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all"
+                      aria-label="Flip camera"
+                      onPress={switchCamera}
+                    >
+                      <RefreshCwIcon className="size-5" />
+                    </Button>
 
-                      <Button
-                        isIconOnly
-                        className={`size-12 sm:size-13 rounded-full transition-all hidden sm:flex ${
-                          isScreenSharing ? "bg-emerald-600 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
+                    <Button
+                      isIconOnly
+                      className={`size-12 sm:size-13 rounded-full transition-all hidden sm:flex ${isScreenSharing ? "bg-emerald-600 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
                         }`}
-                        aria-label="Share screen"
-                        onPress={toggleScreenShare}
-                      >
-                        {isScreenSharing ? <ScreenShareOffIcon className="size-5" /> : <ScreenShareIcon className="size-5" />}
-                      </Button>
+                      aria-label="Share screen"
+                      onPress={toggleScreenShare}
+                    >
+                      {isScreenSharing ? <ScreenShareOffIcon className="size-5" /> : <ScreenShareIcon className="size-5" />}
+                    </Button>
 
-                      <Button
-                        isIconOnly
-                        className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all hidden md:flex"
-                        aria-label="Picture in Picture"
-                        onPress={togglePiP}
-                      >
-                        <PictureInPicture2Icon className="size-5" />
-                      </Button>
-                    </>
-                  )}
+                    <Button
+                      isIconOnly
+                      className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all hidden md:flex"
+                      aria-label="Picture in Picture"
+                      onPress={togglePiP}
+                    >
+                      <PictureInPicture2Icon className="size-5" />
+                    </Button>
+                  </>
+                )}
 
-                  {/* Speaker Toggle */}
-                  <Button
-                    isIconOnly
-                    className={`size-12 sm:size-13 rounded-full transition-all ${
-                      speakerOn ? "bg-zinc-800 text-white hover:bg-zinc-700" : "bg-zinc-800/50 text-zinc-400"
+                {/* Speaker output toggle (honest pressed state, not a mute) */}
+                <Button
+                  isIconOnly
+                  className={`size-12 sm:size-13 rounded-full transition-all ${speakerOn ? "bg-emerald-600 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
                     }`}
-                    aria-label="Toggle speaker"
-                    onPress={async () => {
-                      if (remoteAudioRef.current?.setSinkId) {
-                        try {
-                          await remoteAudioRef.current.setSinkId(speakerOn ? "communications" : "default");
-                        } catch {
-                          /* Device fallback */
-                        }
+                  aria-label="Speaker"
+                  title="Speaker"
+                  aria-pressed={speakerOn}
+                  onPress={async () => {
+                    if (remoteAudioRef.current?.setSinkId) {
+                      try {
+                        await remoteAudioRef.current.setSinkId(speakerOn ? "communications" : "default");
+                      } catch {
+                        /* Device fallback */
                       }
-                      setSpeakerOn((val) => !val);
-                    }}
-                  >
-                    {speakerOn ? <Volume2Icon className="size-5" /> : <VolumeXIcon className="size-5" />}
-                  </Button>
+                    }
+                    setSpeakerOn((val) => !val);
+                  }}
+                >
+                  <Volume2Icon className="size-5" />
+                </Button>
 
-                  {/* End Call Button */}
-                  <Button
-                    isIconOnly
-                    className="size-12 sm:size-13 rounded-full bg-red-600 hover:bg-red-500 text-white shadow-lg hover:scale-105 active:scale-95 transition-all"
-                    aria-label="End call"
-                    onPress={() => end()}
-                  >
-                    <PhoneOffIcon className="size-5" />
-                  </Button>
-                </div>
-              )}
+                {/* End Call Button */}
+                <Button
+                  isIconOnly
+                  className="size-12 sm:size-13 rounded-full bg-red-600 hover:bg-red-500 text-white shadow-lg hover:scale-105 active:scale-95 transition-all"
+                  aria-label="End call"
+                  onPress={() => end()}
+                >
+                  <PhoneOffIcon className="size-5" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>

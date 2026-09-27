@@ -2,8 +2,9 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router";
 import {
   XIcon,
+  ArrowLeftIcon,
+  ExpandIcon,
   SearchIcon,
-  CameraIcon,
   ShieldCheckIcon,
   ShieldOffIcon,
   LogOutIcon,
@@ -18,10 +19,12 @@ import {
   LockKeyholeIcon,
   TimerResetIcon,
   UserRoundIcon,
+  PencilIcon,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { useChatStore } from "../../store/useChatStore";
 import { useAuthStore } from "../../store/useAuthStore";
+import { MediaPreviewModal } from "./MediaPreviewModal";
 import { getInitials } from "../../hooks/useSelectedConversation";
 import { withTransform } from "../../lib/imagekit";
 import { axiosInstance } from "../../lib/axios";
@@ -53,6 +56,159 @@ function SimpleModal({ isOpen, onClose, title, children, footer }) {
   );
 }
 
+function ToggleSwitch({ on, onToggle, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={onToggle}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${on ? "bg-accent" : "bg-border"}`}
+    >
+      <span className={`inline-block size-4 transform rounded-full bg-white shadow transition-transform ${on ? "translate-x-6" : "translate-x-1"}`} />
+    </button>
+  );
+}
+
+function MediaTile({ item, onPreview }) {
+  const content =
+    item.mediaType === "image" ? (
+      <img src={withTransform(item.image, IMAGE_TRANSFORM)} alt="" loading="lazy" className="size-full object-cover" />
+    ) : (
+      <div className="flex size-full items-center justify-center text-muted">{getMediaIcon(item.mediaType)}</div>
+    );
+  const className = "aspect-square w-full overflow-hidden rounded-xl border border-border bg-background";
+  if (item.mediaType === "image" || item.mediaType === "video") {
+    return (
+      <button
+        type="button"
+        onClick={() => onPreview(item)}
+        aria-label="Open media preview"
+        className={`${className} cursor-pointer hover:opacity-90`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return <div className={className}>{content}</div>;
+}
+
+const STRIP_VISIBLE_COUNT = 12;
+
+function AvatarExpandButton({ onOpen }) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+      }}
+      aria-label="View profile photo"
+      title="View profile photo"
+      className="absolute bottom-0 right-0 grid size-8 place-items-center rounded-full border border-border bg-background text-muted shadow-md transition-transform hover:scale-105 active:scale-95"
+    >
+      <ExpandIcon className="size-4" />
+    </button>
+  );
+}
+
+function AvatarPreviewModal({ preview, onClose }) {
+  if (!preview?.src) return null;
+  return (
+    <SimpleModal
+      isOpen
+      onClose={onClose}
+      title={preview.name || "Profile photo"}
+    >
+      <img
+        src={preview.src}
+        alt={preview.name || "Profile photo"}
+        className="max-h-[65vh] w-full rounded-xl bg-black/5 object-contain"
+      />
+    </SimpleModal>
+  );
+}
+
+function MediaSection({ mediaItems }) {
+  const [showAllMedia, setShowAllMedia] = useState(false);
+  const [previewMedia, setPreviewMedia] = useState(null);
+
+  const openPreview = (item) => {
+    setPreviewMedia({
+      type: item.mediaType,
+      src: item.mediaType === "video" ? item.video : item.image,
+      messageId: item._id,
+      fileName: item.fileName || (item.mediaType === "video" ? "Video" : "Photo"),
+    });
+  };
+
+  const visibleItems = mediaItems.slice(0, STRIP_VISIBLE_COUNT);
+  const remainingCount = mediaItems.length - visibleItems.length;
+
+  return (
+    <>
+      <section className="rounded-2xl border border-border bg-surface/45 p-3">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-medium">Media, links and docs</p>
+          <span className="text-xs text-muted">{mediaItems.length}</span>
+        </div>
+        {mediaItems.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted">No media shared yet.</p>
+        ) : (
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {visibleItems.map((item) => (
+              <div key={item._id} className="size-24 shrink-0">
+                <MediaTile item={item} onPreview={openPreview} />
+              </div>
+            ))}
+            {remainingCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAllMedia(true)}
+                aria-label={`View all ${mediaItems.length} media items`}
+                className="grid size-24 shrink-0 place-items-center rounded-xl bg-accent/15 text-sm font-bold text-accent transition-transform hover:scale-105 active:scale-95"
+              >
+                +{remainingCount}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Full gallery as a page inside the info panel, latest first */}
+      {showAllMedia ? (
+        <div className="absolute inset-0 z-30 flex flex-col bg-background">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-3">
+            <button
+              type="button"
+              onClick={() => setShowAllMedia(false)}
+              aria-label="Back to info"
+              className="rounded-full p-1 text-muted hover:bg-surface"
+            >
+              <ArrowLeftIcon className="size-5" />
+            </button>
+            <p className="text-base font-semibold">Media, links and docs</p>
+            <span className="text-xs text-muted">{mediaItems.length}</span>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex flex-wrap gap-1.5">
+              {mediaItems.map((item) => (
+                <div key={item._id} className="size-24 shrink-0">
+                  <MediaTile item={item} onPreview={openPreview} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <MediaPreviewModal key={previewMedia?.src || "closed"} media={previewMedia} onClose={() => setPreviewMedia(null)} />
+    </>
+  );
+}
+
 export function ChatInfoPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
@@ -60,6 +216,7 @@ export function ChatInfoPage() {
   const [conversation, setConversation] = useState(null);
   const [isGroup, setIsGroup] = useState(false);
   const [media, setMedia] = useState([]);
+  const [avatarPreview, setAvatarPreview] = useState(null);
   const [editingName, setEditingName] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
   const [nameValue, setNameValue] = useState("");
@@ -74,6 +231,12 @@ export function ChatInfoPage() {
     sendMessages: "members",
   });
   const [showPermissions, setShowPermissions] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [disappearing, setDisappearing] = useState(false);
+  const [busyMemberAction, setBusyMemberAction] = useState(null);
+  const [removeTarget, setRemoveTarget] = useState(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
 
   const conversations = useChatStore((state) => state.conversations);
   const users = useChatStore((state) => state.users);
@@ -119,6 +282,16 @@ export function ChatInfoPage() {
       return () => window.clearTimeout(timer);
     }
   }, [conversationId, conversations]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    try {
+      setMuted(window.localStorage.getItem(`lark:muted:${conversationId}`) === "1");
+      setDisappearing(window.localStorage.getItem(`lark:disappearing:${conversationId}`) === "1");
+    } catch {
+      /* storage unavailable */
+    }
+  }, [conversationId]);
 
   const isAdmin = useMemo(() => {
     if (!isGroup || !conversation) return false;
@@ -186,36 +359,79 @@ export function ChatInfoPage() {
     }
   };
 
-  const handleAddMembers = async (selectedUsers) => {
-    const result = await addGroupMembers(conversationId, selectedUsers.map((u) => u._id));
-    if (result) {
-      setConversation(result);
-      setShowAddMembers(false);
-      setMemberSearch("");
+  const toggleMuted = () => {
+    const next = !muted;
+    setMuted(next);
+    try {
+      window.localStorage.setItem(`lark:muted:${conversationId}`, next ? "1" : "0");
+    } catch {
+      /* storage unavailable */
     }
   };
 
-  const handleRemoveMember = async (userId) => {
-    if (String(userId) === String(authUser?._id)) return;
-    const result = await removeGroupMember(conversationId, userId);
-    if (result) setConversation(result);
+  const toggleDisappearing = () => {
+    const next = !disappearing;
+    setDisappearing(next);
+    try {
+      window.localStorage.setItem(`lark:disappearing:${conversationId}`, next ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
+  };
+
+  const closeAddMembers = () => {
+    setShowAddMembers(false);
+    setMemberSearch("");
+    setSelectedMemberIds([]);
+  };
+
+  const toggleMemberSelection = (userId) => {
+    const id = String(userId);
+    setSelectedMemberIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const handleAddMembers = async () => {
+    if (selectedMemberIds.length === 0) return;
+    const result = await addGroupMembers(conversationId, selectedMemberIds);
+    if (result) {
+      setConversation(result);
+      closeAddMembers();
+    }
+  };
+
+  const handleRemoveMember = async () => {
+    if (!removeTarget || String(removeTarget) === String(authUser?._id)) return;
+    const key = `remove:${removeTarget}`;
+    setBusyMemberAction(key);
+    const result = await removeGroupMember(conversationId, removeTarget);
+    setBusyMemberAction(null);
+    if (result) {
+      setConversation(result);
+      setRemoveTarget(null);
+    }
   };
 
   const handleLeave = async () => {
-    if (!confirm("Are you sure you want to leave this group?")) return;
     const result = await leaveGroup(conversationId);
+    setShowLeaveConfirm(false);
     if (result) {
       navigate("/");
     }
   };
 
   const handlePromote = async (userId) => {
+    const key = `promote:${userId}`;
+    setBusyMemberAction(key);
     const result = await promoteAdmin(conversationId, userId);
+    setBusyMemberAction(null);
     if (result) setConversation(result);
   };
 
   const handleDemote = async (userId) => {
+    const key = `demote:${userId}`;
+    setBusyMemberAction(key);
     const result = await demoteAdmin(conversationId, userId);
+    setBusyMemberAction(null);
     if (result) setConversation(result);
   };
 
@@ -235,7 +451,9 @@ export function ChatInfoPage() {
     const videos = media.filter((m) => m.video).map((m) => ({ ...m, mediaType: "video" }));
     const audio = media.filter((m) => m.audio).map((m) => ({ ...m, mediaType: "audio" }));
     const files = media.filter((m) => m.file).map((m) => ({ ...m, mediaType: "file" }));
-    return [...images, ...videos, ...audio, ...files];
+    return [...images, ...videos, ...audio, ...files].sort(
+      (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+    );
   }, [media]);
 
   if (isLoading) {
@@ -260,7 +478,7 @@ export function ChatInfoPage() {
   if (!isGroup) {
     const user = conversation;
     return (
-      <div className="flex h-full flex-col overflow-hidden bg-background">
+      <div className="relative flex h-full flex-col overflow-hidden bg-background">
         <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-3">
           <button onClick={handleBack} className="rounded-full p-1 text-muted hover:bg-surface">
             <XIcon className="size-5" />
@@ -270,58 +488,52 @@ export function ChatInfoPage() {
 
         <div className="flex-1 overflow-y-auto">
           <div className="flex flex-col items-center gap-2 px-6 pb-5 pt-7">
-            <div className="size-28 rounded-full bg-surface flex items-center justify-center overflow-hidden ring-1 ring-border">
-              {user.profilePic ? (
+            {user.profilePic ? (
+              <button
+                type="button"
+                onClick={() => setAvatarPreview({ src: user.profilePic, name: user.fullName || user.name })}
+                aria-label="View profile photo"
+                title="View profile photo"
+                className="size-28 shrink-0 overflow-hidden rounded-full bg-surface ring-1 ring-border transition-transform hover:scale-[1.02] active:scale-95"
+              >
                 <img src={user.profilePic} alt="" className="size-full object-cover" />
-              ) : (
+              </button>
+            ) : (
+              <div className="flex size-28 shrink-0 items-center justify-center rounded-full bg-surface ring-1 ring-border">
                 <span className="text-2xl font-medium">{getInitials(user.fullName || user.name)}</span>
-              )}
-            </div>
+              </div>
+            )}
+            {avatarPreview ? (
+              <AvatarPreviewModal preview={avatarPreview} onClose={() => setAvatarPreview(null)} />
+            ) : null}
             <p className="mt-1 text-lg font-semibold">{user.fullName || user.name}</p>
             <p className="text-sm text-muted">{user.username ? `@${user.username}` : "Lark contact"}</p>
             {user.bio && <p className="max-w-sm text-center text-sm text-muted">{user.bio}</p>}
           </div>
 
-          <section className="mx-3 mb-3 rounded-2xl border border-border bg-surface/45 p-3 sm:mx-5">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-medium">Media, links and docs</p>
-              <span className="text-xs text-muted">{mediaItems.length}</span>
-            </div>
-            {mediaItems.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted">No media shared yet.</p>
-            ) : (
-              <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-6">
-                {mediaItems.slice(0, 12).map((item) => (
-                  <button
-                    key={item._id}
-                    type="button"
-                    className="aspect-square overflow-hidden rounded-lg border border-border bg-background"
-                  >
-                    {item.mediaType === "image" ? (
-                      <img src={withTransform(item.image, IMAGE_TRANSFORM)} alt="" className="size-full object-cover" />
-                    ) : (
-                      <div className="flex size-full items-center justify-center text-muted">
-                        {getMediaIcon(item.mediaType)}
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
+          <div className="mx-3 mb-3 sm:mx-5">
+            <MediaSection mediaItems={mediaItems} />
+          </div>
 
           <section className="mx-3 overflow-hidden rounded-2xl border border-border bg-surface/45 sm:mx-5">
-            {[
-              [UserRoundIcon, user.email || "Contact details", "Email"],
-              [BellOffIcon, "Notifications", "Muted"],
-              [TimerResetIcon, "Disappearing messages", "Off"],
-              [LockKeyholeIcon, "Encryption", "Messages are end-to-end protected"],
-            ].map(([Icon, title, detail]) => (
-              <div key={title} className="flex items-center gap-3 border-b border-border px-3 py-3 last:border-b-0">
-                <Icon className="size-5 shrink-0 text-accent" />
-                <div className="min-w-0"><p className="truncate text-sm font-medium">{title}</p><p className="truncate text-xs text-muted">{detail}</p></div>
-              </div>
-            ))}
+            <div className="flex items-center gap-3 border-b border-border px-3 py-3">
+              <UserRoundIcon className="size-5 shrink-0 text-accent" />
+              <div className="min-w-0"><p className="truncate text-sm font-medium">{user.email || "Contact details"}</p><p className="truncate text-xs text-muted">Email</p></div>
+            </div>
+            <div className="flex items-center gap-3 border-b border-border px-3 py-3">
+              <BellOffIcon className="size-5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">Notifications</p><p className="truncate text-xs text-muted">{muted ? "Muted" : "On"}</p></div>
+              <ToggleSwitch on={!muted} onToggle={toggleMuted} label="Toggle notifications" />
+            </div>
+            <div className="flex items-center gap-3 border-b border-border px-3 py-3">
+              <TimerResetIcon className="size-5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">Disappearing messages</p><p className="truncate text-xs text-muted">{disappearing ? "On" : "Off"}</p></div>
+              <ToggleSwitch on={disappearing} onToggle={toggleDisappearing} label="Toggle disappearing messages" />
+            </div>
+            <div className="flex items-center gap-3 px-3 py-3">
+              <LockKeyholeIcon className="size-5 shrink-0 text-accent" />
+              <div className="min-w-0"><p className="truncate text-sm font-medium">Encryption</p><p className="truncate text-xs text-muted">Messages are end-to-end protected</p></div>
+            </div>
           </section>
         </div>
       </div>
@@ -330,9 +542,21 @@ export function ChatInfoPage() {
 
   const memberList = conversation.members || [];
   const adminIds = new Set((conversation.admins || []).map((a) => String(a._id || a)));
+  const removeTargetMember = removeTarget
+    ? memberList.find((m) => String(m._id || m) === String(removeTarget))
+    : null;
+  const groupAvatar = (
+    <div className="size-24 rounded-full bg-surface border-2 border-dashed border-border flex items-center justify-center overflow-hidden">
+      {groupImagePreview || conversation.profilePic ? (
+        <img src={groupImagePreview || conversation.profilePic} alt="" className="size-full object-cover" />
+      ) : (
+        <span className="text-2xl font-medium">{getInitials(conversation.name || "G")}</span>
+      )}
+    </div>
+  );
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background">
+    <div className="relative flex h-full flex-col overflow-hidden bg-background">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <button onClick={handleBack} className="rounded-full p-1 text-muted hover:bg-surface">
           <XIcon className="size-5" />
@@ -342,15 +566,28 @@ export function ChatInfoPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col items-center gap-3 p-6">
-          <label htmlFor="group-image-upload-info" className="cursor-pointer">
-            <div className="size-24 rounded-full bg-surface border-2 border-dashed border-border flex items-center justify-center overflow-hidden">
+          {canEditInfo ? (
+            <label htmlFor="group-image-upload-info" className="relative block cursor-pointer">
+              {groupAvatar}
               {groupImagePreview || conversation.profilePic ? (
-                <img src={groupImagePreview || conversation.profilePic} alt="" className="size-full object-cover" />
-              ) : (
-                <span className="text-2xl font-medium">{getInitials(conversation.name || "G")}</span>
-              )}
+                <AvatarExpandButton
+                  onOpen={() => setAvatarPreview({ src: groupImagePreview || conversation.profilePic, name: conversation.name })}
+                />
+              ) : null}
+            </label>
+          ) : (
+            <div className="relative">
+              {groupAvatar}
+              {conversation.profilePic ? (
+                <AvatarExpandButton
+                  onOpen={() => setAvatarPreview({ src: conversation.profilePic, name: conversation.name })}
+                />
+              ) : null}
             </div>
-          </label>
+          )}
+          {avatarPreview ? (
+            <AvatarPreviewModal preview={avatarPreview} onClose={() => setAvatarPreview(null)} />
+          ) : null}
           <input
             id="group-image-upload-info"
             type="file"
@@ -379,8 +616,8 @@ export function ChatInfoPage() {
             <div className="flex items-center gap-2">
               <p className="text-xl font-semibold">{conversation.name}</p>
               {canEditInfo && (
-                <button onClick={() => setEditingName(true)} className="rounded-full p-1 text-muted hover:bg-surface">
-                  <CameraIcon className="size-4" />
+                <button onClick={() => setEditingName(true)} className="rounded-full p-1 text-muted hover:bg-surface" aria-label="Edit group name">
+                  <PencilIcon className="size-4" />
                 </button>
               )}
             </div>
@@ -411,6 +648,12 @@ export function ChatInfoPage() {
             </button>
           ) : null}
           <p className="text-xs text-muted">Created {new Date(conversation.createdAt).toLocaleDateString()}</p>
+        </div>
+
+        <div className="border-t border-border" />
+
+        <div className="px-4 py-4">
+          <MediaSection mediaItems={mediaItems} />
         </div>
 
         <div className="border-t border-border" />
@@ -451,15 +694,15 @@ export function ChatInfoPage() {
                   {isAdmin && !isMe && (
                     <div className="flex gap-1">
                       {!isMemberAdmin ? (
-                        <button onClick={() => handlePromote(memberId)} className="rounded-full p-1.5 text-success hover:bg-surface" aria-label="Promote to admin">
+                        <button onClick={() => handlePromote(memberId)} disabled={busyMemberAction === `promote:${memberId}`} className="rounded-full p-1.5 text-success hover:bg-surface disabled:opacity-50" aria-label="Promote to admin">
                           <ShieldCheckIcon className="size-4" />
                         </button>
                       ) : (
-                        <button onClick={() => handleDemote(memberId)} className="rounded-full p-1.5 text-danger hover:bg-surface" aria-label="Demote admin">
+                        <button onClick={() => handleDemote(memberId)} disabled={busyMemberAction === `demote:${memberId}`} className="rounded-full p-1.5 text-danger hover:bg-surface disabled:opacity-50" aria-label="Demote admin">
                           <ShieldOffIcon className="size-4" />
                         </button>
                       )}
-                      <button onClick={() => handleRemoveMember(memberId)} className="rounded-full p-1.5 text-danger hover:bg-surface" aria-label="Remove member">
+                      <button onClick={() => setRemoveTarget(memberId)} disabled={busyMemberAction === `remove:${memberId}`} className="rounded-full p-1.5 text-danger hover:bg-surface disabled:opacity-50" aria-label="Remove member">
                         <TrashIcon className="size-4" />
                       </button>
                     </div>
@@ -486,15 +729,25 @@ export function ChatInfoPage() {
         <div className="border-t border-border" />
 
         <div className="p-4">
-          <button onClick={handleLeave} className="flex w-full items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger hover:bg-danger/20 transition-colors">
+          <button onClick={() => setShowLeaveConfirm(true)} className="flex w-full items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger hover:bg-danger/20 transition-colors">
             <LogOutIcon className="size-4" />
             Leave Group
           </button>
         </div>
       </div>
 
-      <SimpleModal isOpen={showAddMembers} onClose={() => setShowAddMembers(false)} title="Add Members" footer={
-        <button onClick={() => setShowAddMembers(false)} className="px-4 py-2 text-sm rounded-xl hover:bg-surface">Done</button>
+      <SimpleModal isOpen={showAddMembers} onClose={closeAddMembers} title="Add Members" footer={
+        <>
+          <button type="button" onClick={closeAddMembers} className="px-4 py-2 text-sm rounded-xl hover:bg-surface">Cancel</button>
+          <button
+            type="button"
+            onClick={handleAddMembers}
+            disabled={selectedMemberIds.length === 0}
+            className="px-4 py-2 text-sm font-medium bg-accent text-accent-foreground rounded-xl disabled:opacity-50"
+          >
+            Add{selectedMemberIds.length > 0 ? ` (${selectedMemberIds.length})` : ""}
+          </button>
+        </>
       }>
         <div className="relative mb-2">
           <SearchIcon className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -510,26 +763,34 @@ export function ChatInfoPage() {
           {availableUsers.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted">No users found.</p>
           ) : (
-            availableUsers.map((user) => (
-              <button
-                key={user._id}
-                type="button"
-                onClick={() => handleAddMembers([user])}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-surface"
-              >
-                <div className="size-9 rounded-full bg-surface flex items-center justify-center overflow-hidden">
-                  {user.profilePic ? (
-                    <img src={user.profilePic} alt="" className="size-full object-cover" />
-                  ) : (
-                    <span className="text-xs font-medium">{getInitials(user.fullName)}</span>
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{user.fullName}</p>
-                  <p className="truncate text-xs text-muted">@{user.username}</p>
-                </div>
-              </button>
-            ))
+            availableUsers.map((user) => {
+              const userId = String(user._id);
+              const checked = selectedMemberIds.includes(userId);
+              return (
+                <label
+                  key={user._id}
+                  className="flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left hover:bg-surface"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleMemberSelection(userId)}
+                    className="size-4 shrink-0 accent-accent"
+                  />
+                  <div className="size-9 rounded-full bg-surface flex items-center justify-center overflow-hidden">
+                    {user.profilePic ? (
+                      <img src={user.profilePic} alt="" className="size-full object-cover" />
+                    ) : (
+                      <span className="text-xs font-medium">{getInitials(user.fullName)}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{user.fullName}</p>
+                    <p className="truncate text-xs text-muted">@{user.username}</p>
+                  </div>
+                </label>
+              );
+            })
           )}
         </div>
       </SimpleModal>
@@ -563,6 +824,50 @@ export function ChatInfoPage() {
             </div>
           </div>
         </div>
+      </SimpleModal>
+
+      <SimpleModal
+        isOpen={Boolean(removeTarget)}
+        onClose={() => setRemoveTarget(null)}
+        title="Remove member"
+        footer={
+          <>
+            <button type="button" onClick={() => setRemoveTarget(null)} className="px-4 py-2 text-sm rounded-xl hover:bg-surface">Cancel</button>
+            <button
+              type="button"
+              onClick={handleRemoveMember}
+              disabled={Boolean(busyMemberAction)}
+              className="px-4 py-2 text-sm font-medium bg-danger text-white rounded-xl disabled:opacity-50"
+            >
+              {busyMemberAction ? "Removing..." : "Remove"}
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted">
+          Are you sure you want to remove{" "}
+          <span className="font-medium text-foreground">{removeTargetMember?.fullName || "this member"}</span>{" "}
+          from this group?
+        </p>
+      </SimpleModal>
+
+      <SimpleModal
+        isOpen={showLeaveConfirm}
+        onClose={() => setShowLeaveConfirm(false)}
+        title="Leave group"
+        footer={
+          <>
+            <button type="button" onClick={() => setShowLeaveConfirm(false)} className="px-4 py-2 text-sm rounded-xl hover:bg-surface">Cancel</button>
+            <button type="button" onClick={handleLeave} className="px-4 py-2 text-sm font-medium bg-danger text-white rounded-xl">
+              Leave
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted">
+          Are you sure you want to leave{" "}
+          <span className="font-medium text-foreground">{conversation.name}</span>?
+        </p>
       </SimpleModal>
     </div>
   );

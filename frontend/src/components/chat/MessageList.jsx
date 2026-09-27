@@ -273,7 +273,7 @@ export function MessageList() {
           aria-live="polite"
           aria-atomic="false"
           aria-label="Messages"
-          className={`flex flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3 sm:py-4 ${
+          className={`no-scrollbar flex flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3 sm:py-4 ${
             isSelectionActive ? "pb-24" : ""
           }`}
         >

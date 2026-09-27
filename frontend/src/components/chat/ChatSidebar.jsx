@@ -207,7 +207,7 @@ function ChatSidebar({ width }) {
 
         <Tabs.Panel
           id="chats"
-          className="flex-1 overflow-x-hidden overflow-y-auto outline-none"
+          className="no-scrollbar flex-1 overflow-x-hidden overflow-y-auto outline-none"
         >
           {(normalizedSearchQuery ? searchResults : filteredConversations)
             .length === 0 ? (
@@ -230,7 +230,7 @@ function ChatSidebar({ width }) {
 
         <Tabs.Panel
           id="calls"
-          className="flex-1 overflow-x-hidden overflow-y-auto outline-none"
+          className="no-scrollbar flex-1 overflow-x-hidden overflow-y-auto outline-none"
         >
           <CallHistory />
         </Tabs.Panel>

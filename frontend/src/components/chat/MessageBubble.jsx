@@ -2,6 +2,7 @@ import { memo, useState } from "react";
 import {
   CheckCheckIcon,
   CheckIcon,
+  DownloadIcon,
   FileTextIcon,
   FileSpreadsheetIcon,
   PresentationIcon,
@@ -202,6 +203,38 @@ export const MessageBubble = memo(function MessageBubble({
   const fileDisplay = getFileDisplayInfo(message.fileType, message.fileName);
 
   const FileTypeIcon = fileDisplay.Icon;
+
+  // Color-coded tile per document type (PDF red, Word blue, Excel green, …)
+  // so the card reads at a glance instead of a washed-out generic icon.
+  const fileTileColor = (() => {
+    const label = String(fileDisplay.label || "").toUpperCase();
+    if (label.includes("PDF")) return "bg-red-500";
+    if (label.includes("WORD")) return "bg-blue-600";
+    if (label.includes("EXCEL") || label.includes("SHEET") || label.includes("CSV")) return "bg-emerald-600";
+    if (label.includes("PPT") || label.includes("SLIDE")) return "bg-orange-500";
+    if (label.includes("ZIP") || label.includes("ARCHIVE") || label.includes("RAR")) return "bg-amber-600";
+    return "bg-slate-500";
+  })();
+
+  const fileSizeLabel = message.fileSize
+    ? `${(message.fileSize / (1024 * 1024)).toFixed(1)} MB`
+    : "";
+
+  // Open the file with a fresh signed URL when the stored one has expired.
+  const openFileUrl = async () => {
+    if (!message.fileUrl?.includes("ik-t=")) {
+      window.open(message.fileUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const fresh = await refreshMedia("file");
+      if (fresh?.url) {
+        window.open(fresh.url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      window.open(message.fileUrl, "_blank", "noopener,noreferrer");
+    }
+  };
 
   const statusLabel = message.readAt
     ? "Read"
@@ -500,82 +533,76 @@ export const MessageBubble = memo(function MessageBubble({
           {/* AUDIO */}
 
           {hasAudio ? (
-            <MessageAudio src={message.audioUrl} messageId={messageId} />
+            <MessageAudio src={message.audioUrl} messageId={messageId} isOwnMessage={isOwnMessage} />
           ) : null}
 
           {/* FILE / PDF / WORD / EXCEL / PPT */}
 
           {hasFile && (
-            <a
-              href={message.fileUrl}
-              target="_blank"
-              rel="noreferrer"
-              onClick={async (event) => {
-                if (!message.fileUrl?.includes("ik-t=")) {
-                  return;
-                }
-
-                event.preventDefault();
-
-                try {
-                  const fresh = await refreshMedia("file");
-
-                  if (fresh?.url) {
-                    window.open(fresh.url, "_blank", "noopener,noreferrer");
-                  }
-                } catch {
-                  window.open(message.fileUrl, "_blank", "noopener,noreferrer");
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={openFileUrl}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openFileUrl();
                 }
               }}
-              className={`mb-1 block h-[190px] w-[280px] max-w-full overflow-hidden rounded-xl border ${
+              aria-label={`Open ${message.fileName || "document"}`}
+              className={`mb-1 flex w-[280px] max-w-full cursor-pointer items-center gap-3 rounded-2xl p-3 transition-colors ${
                 isOwnMessage
-                  ? "border-accent-foreground/20 bg-accent-foreground/10"
-                  : "border-border bg-background"
+                  ? "bg-black/20 hover:bg-black/25"
+                  : "border border-border bg-background/60 hover:bg-background"
               }`}
             >
               {message.fileThumbnail ? (
-                <div className="h-[140px] w-full overflow-hidden bg-black/5">
-                  <img
-                    src={message.fileThumbnail}
-                    alt={message.fileName || "File preview"}
-                    className="h-full w-full object-cover object-top"
-                    loading="lazy"
-                    decoding="async"
-                    onError={(event) => {
-                      event.currentTarget.style.display = "none";
-                    }}
-                  />
-                </div>
+                <img
+                  src={message.fileThumbnail}
+                  alt=""
+                  className="size-12 shrink-0 rounded-lg object-cover"
+                  loading="lazy"
+                  decoding="async"
+                  onError={(event) => {
+                    event.currentTarget.style.display = "none";
+                  }}
+                />
               ) : (
-                <div className="flex h-[140px] items-center justify-center bg-black/5">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="grid size-14 place-items-center rounded-xl bg-background shadow-sm">
-                      <FileTypeIcon className="size-7 text-accent" />
-                    </div>
-
-                    <span className="text-xs font-semibold uppercase text-muted">
-                      {fileDisplay.label}
-                    </span>
-                  </div>
+                <div
+                  className={`grid size-12 shrink-0 place-items-center rounded-xl text-white shadow-sm ${fileTileColor}`}
+                >
+                  <FileTypeIcon className="size-6" aria-hidden />
                 </div>
               )}
 
-              <div className="flex h-[50px] min-w-0 items-center gap-2 px-3">
-                <FileTypeIcon className="size-5 shrink-0 text-accent" />
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {message.fileName || "Document"}
-                  </p>
-
-                  {message.fileSize ? (
-                    <p className="text-xs text-muted">
-                      {(message.fileSize / (1024 * 1024)).toFixed(1)} MB
-                    </p>
-                  ) : null}
-                </div>
+              <div className="min-w-0 flex-1">
+                <p
+                  className={`truncate text-sm font-medium ${
+                    isOwnMessage ? "text-white" : "text-foreground"
+                  }`}
+                >
+                  {message.fileName || "Document"}
+                </p>
+                <p
+                  className={`mt-0.5 text-xs tabular-nums ${
+                    isOwnMessage ? "text-white/70" : "text-muted"
+                  }`}
+                >
+                  {[fileSizeLabel, fileDisplay.label].filter(Boolean).join(" \u00b7 ")}
+                </p>
               </div>
-            </a>
+
+              <span
+                className={`grid size-9 shrink-0 place-items-center rounded-full transition-transform hover:scale-105 active:scale-95 ${
+                  isOwnMessage
+                    ? "bg-white/20 text-white"
+                    : "bg-accent/15 text-accent"
+                }`}
+                aria-hidden
+              >
+                <DownloadIcon className="size-4" />
+              </span>
+            </div>
           )}
 
           {/* REPLY */}

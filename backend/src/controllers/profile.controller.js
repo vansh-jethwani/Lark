@@ -92,7 +92,7 @@ export async function updateProfile(req, res) {
         bio,
         profilePic,
       },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     );
 
     res.status(200).json(serializeProfile(updatedUser));

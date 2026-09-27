@@ -401,6 +401,11 @@ export const useChatStore = create(
           messages: [...asArray(state.messages), optimisticMessage],
         }));
 
+        // Clear the composer immediately so a fast double-Enter can't fire a
+        // second send with the same text. `replyingTo` is left alone here
+        // because postMessageToServer reads it after the optimistic insert.
+        set((state) => ({ composerText: "", drafts: { ...state.drafts, [selectedUser._id]: "" } }));
+
         try {
           const serverMessage = await postMessageToServer(get, payloadToSend, selectedUser);
           const decryptedNewMessage = await decryptSingleMessage(serverMessage, get);

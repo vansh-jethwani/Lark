@@ -75,3 +75,13 @@
     transform: translateX(100%);
   }
 }
+
+/* Hide scrollbars while keeping the areas scrollable (wheel / touch / keyboard) */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+

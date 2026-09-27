@@ -22,6 +22,7 @@ function uniqueRecipients(users, conversations, authUserId) {
 
 export function ForwardMessageModal({ isOpen, onClose, onForwardComplete, message, messages }) {
   const [selectedRecipientIds, setSelectedRecipientIds] = useState([]);
+  const [isForwarding, setIsForwarding] = useState(false);
   const users = useChatStore((state) => state.users);
   const conversations = useChatStore((state) => state.conversations);
   const forwardMessage = useChatStore((state) => state.forwardMessage);
@@ -49,20 +50,27 @@ export function ForwardMessageModal({ isOpen, onClose, onForwardComplete, messag
   };
 
   const handleForward = async () => {
-    const didForward =
-      messageIds.length === 1
-        ? await forwardMessage({
-            messageId: messageIds[0],
-            receiverIds: selectedRecipientIds,
-          })
-        : await forwardMessages({
-            messageIds,
-            receiverIds: selectedRecipientIds,
-          });
+    if (isForwarding) return;
+    setIsForwarding(true);
 
-    if (didForward) {
-      handleClose();
-      onForwardComplete?.();
+    try {
+      const didForward =
+        messageIds.length === 1
+          ? await forwardMessage({
+              messageId: messageIds[0],
+              receiverIds: selectedRecipientIds,
+            })
+          : await forwardMessages({
+              messageIds,
+              receiverIds: selectedRecipientIds,
+            });
+
+      if (didForward) {
+        handleClose();
+        onForwardComplete?.();
+      }
+    } finally {
+      setIsForwarding(false);
     }
   };
 
@@ -138,11 +146,11 @@ export function ForwardMessageModal({ isOpen, onClose, onForwardComplete, messag
           <button
             type="button"
             onClick={handleForward}
-            disabled={selectedRecipientIds.length === 0}
+            disabled={selectedRecipientIds.length === 0 || isForwarding}
             className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Forward className="size-4" aria-hidden />
-            Forward
+            {isForwarding ? "Forwarding..." : "Forward"}
           </button>
         </div>
       </div>

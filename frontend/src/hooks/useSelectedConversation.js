@@ -41,7 +41,7 @@ function mapUserToConversation({ user, messages, authUser, onlineUsers }) {
 
     return {
       id: message._id,
-      role: String(message.senderId) === String(authUser?._id) ? "me" : "them",
+      role: String(message.senderId?._id || message.senderId) === String(authUser?._id) ? "me" : "them",
       text: message.text || "",
       time: formatMessageTime(message.createdAt),
       createdAt: message.createdAt,
@@ -98,9 +98,9 @@ export function useSelectedConversation() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const selectedUser = activeConversationId
-    ? users.find((user) => user._id === activeConversationId) ||
-      conversations.find((user) => user._id === activeConversationId)
-    : null;
+  ? users.find((user) => String(user._id) === String(activeConversationId)) ||
+    conversations.find((user) => String(user._id) === String(activeConversationId))
+  : null;
 
   const activeConversation = useMemo(
     () =>
