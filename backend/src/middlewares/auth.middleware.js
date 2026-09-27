@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import Session from "../models/session.model.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -19,15 +20,33 @@ export default async function protectRoute(req, res, next){
         return res.status(401).json({message: "Unauthorized"})
        }
 
-       // Tokens issued before a password change/reset carry a stale version.
-       // Tokens minted before this check existed carry no version and are
-       // allowed to age out naturally.
+       // Tokens minted before tokenVersion existed carry no version and are
+       // rejected outright: a stolen legacy token must not survive a password
+       // change. Everyone signs in again once after this ships.
        if (
-        typeof decoded.tokenVersion === "number" &&
+        typeof decoded.tokenVersion !== "number" ||
         user.tokenVersion !== decoded.tokenVersion
        ){
         return res.status(401).json({message: "Unauthorized"})
        }
+
+       // Per-session revocation (Settings → Active sessions). Tokens issued
+       // before sessions existed carry no sessionId and are rejected with the
+       // legacy tokens above.
+       if (!decoded.sessionId) {
+        return res.status(401).json({message: "Unauthorized"})
+       }
+       const session = await Session.findById(decoded.sessionId).select("_id userId revoked lastSeenAt");
+       if (!session || session.revoked || String(session.userId) !== String(user._id)) {
+        return res.status(401).json({message: "Unauthorized"})
+       }
+       // Throttled "last seen" touch so the sessions list stays fresh without
+       // a write on every single request.
+       if (!session.lastSeenAt || Date.now() - new Date(session.lastSeenAt).getTime() > 15 * 60 * 1000) {
+        session.lastSeenAt = new Date();
+        session.save().catch(() => {});
+       }
+       req.sessionId = session._id;
 
        req.user = user
        req.userId = user._id

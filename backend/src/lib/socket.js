@@ -8,6 +8,8 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import Call from "../models/call.model.js";
 import Group from "../models/group.model.js";
+import { applyPhotoPrivacy } from "./privacy.js";
+import Session from "../models/session.model.js";
 import User from "../models/user.model.js";
 import { sendIncomingCallNotification } from "./notifications.js";
 
@@ -100,6 +102,15 @@ function disconnectUserSockets(userId) {
     io.in(userRoom(userId)).disconnectSockets(true);
 }
 
+// Disconnect only the sockets that authenticated with one specific login
+// session (Settings → Active sessions → Revoke). Other devices stay online.
+function disconnectSessionSockets(sessionId) {
+    const target = String(sessionId);
+    for (const socket of io.sockets.sockets.values()) {
+        if (socket.data?.sessionId === target) socket.disconnect(true);
+    }
+}
+
 // Only genuine WebRTC signaling fields may be relayed to the peer. Identity
 // fields (caller name/avatar) are resolved server-side from the authenticated
 // user below, so a client can never spoof them on the callee's ringing screen.
@@ -183,15 +194,24 @@ io.use(async (socket, next) => {
 
         // Same session-revocation rule as the REST middleware: a password
         // change bumps tokenVersion and invalidates older sockets' tokens.
+        // Legacy tokens without a version or session are rejected outright.
         if (
-            typeof decoded.tokenVersion === "number" &&
-            user.tokenVersion !== decoded.tokenVersion
+            typeof decoded.tokenVersion !== "number" ||
+            user.tokenVersion !== decoded.tokenVersion ||
+            !decoded.sessionId
         ) {
+            return next(new Error("Unauthorized"));
+        }
+
+        const session = await Session.findById(decoded.sessionId).select("_id userId revoked");
+        if (!session || session.revoked || String(session.userId) !== String(user._id)) {
             return next(new Error("Unauthorized"));
         }
 
         // Server determines the user's identity.
         socket.userId = user._id.toString();
+        socket.data.userId = user._id.toString();
+        socket.data.sessionId = String(decoded.sessionId);
 
         next();
     } catch (error) {
@@ -264,6 +284,17 @@ io.on("connection", (socket) => {
                 if (String(receiverId) === userId || !(await User.exists({ _id: receiverId }))) {
                     return socket.emit("call:failed", { callId, message: "Recipient is unavailable." });
                 }
+                // Blocked in either direction: no calls. Same message as a
+                // genuinely unavailable recipient so blocking stays private.
+                const blockExists = await User.exists({
+                    $or: [
+                        { _id: receiverId, blockedUsers: userId },
+                        { _id: userId, blockedUsers: receiverId },
+                    ],
+                });
+                if (blockExists) {
+                    return socket.emit("call:failed", { callId, message: "Recipient is unavailable." });
+                }
                 await Call.create({
                     callId,
                     caller: userId,
@@ -275,7 +306,8 @@ io.on("connection", (socket) => {
                 // Identity shown on the callee's ringing screen is resolved
                 // server-side from the authenticated user: the client-supplied
                 // payload is not trusted for it (spoofing risk).
-                const caller = await User.findById(userId).select("fullName profilePic");
+                const callerDoc = await User.findById(userId).select("fullName profilePic privacy");
+                const caller = applyPhotoPrivacy(callerDoc);
 
                 relayCall(
                     "call:ring",
@@ -536,4 +568,5 @@ export {
     getReceiverSocketId,
     isUserOnline,
     disconnectUserSockets,
+    disconnectSessionSockets,
 };

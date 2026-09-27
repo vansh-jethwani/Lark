@@ -4,12 +4,15 @@ import Message from "../models/message.model.js";
 import { getReceiverSocketId, io } from "../lib/socket.js";
 import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
 import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
+import { expiryDateFor, isValidDisappearingDuration } from "../lib/disappearing.js";
+import { applyPhotoPrivacyToList } from "../lib/privacy.js";
 
 const populate = (query) =>
   query
-    .populate("members", "fullName username profilePic")
-    .populate("admins", "_id fullName username profilePic")
-    .populate("createdBy", "_id fullName username profilePic")
+    // publicKey is selected so members can wrap the group E2EE key for each member.
+    .populate("members", "fullName username profilePic privacy publicKey")
+    .populate("admins", "_id fullName username profilePic privacy publicKey")
+    .populate("createdBy", "_id fullName username profilePic privacy publicKey")
     .lean();
 
 const id = (value) => String(value);
@@ -22,18 +25,102 @@ const isMember = (group, userId) =>
 
 function sanitizeGroup(group) {
   if (!group) return null;
+  const latestWraps = (group.keyWraps || []).length
+    ? group.keyWraps[group.keyWraps.length - 1]
+    : null;
   return {
     _id: group._id,
     name: group.name,
     profilePic: presentMessageMedia({ image: group.profilePic }).image,
     description: group.description,
-    members: group.members,
-    admins: group.admins,
-    createdBy: group.createdBy,
+    // Profile-photo privacy: members who chose "nobody" are listed photo-less.
+    members: applyPhotoPrivacyToList(group.members),
+    admins: applyPhotoPrivacyToList(group.admins),
+    createdBy: group.createdBy ? applyPhotoPrivacyToList([group.createdBy])[0] : group.createdBy,
     permissions: group.permissions,
+    disappearingDuration: group.disappearingDuration || 0,
+    // Group E2EE: keyVersion 0 = not encrypted yet. keyHolders lists the
+    // members holding a wrapped copy of the current key version.
+    keyVersion: group.keyVersion || 0,
+    keyHolders: latestWraps ? latestWraps.wraps.map((wrap) => String(wrap.userId)) : [],
     createdAt: group.createdAt,
     updatedAt: group.updatedAt,
   };
+}
+
+// Group E2EE: validate a client-supplied key rotation against the group state
+// and the intended member list. `rotation` is
+// { expectedVersion, wrapperPublicKey, wraps: [{ userId, wrappedKey }] }.
+function validateKeyRotation(group, rotation, newMembers) {
+  if (!rotation) return { ok: true, apply: false };
+  const expectedVersion = Number(rotation.expectedVersion);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    return { ok: false, message: "Invalid key version." };
+  }
+  if ((group.keyVersion || 0) !== expectedVersion) {
+    return { ok: false, conflict: true, message: "The group key changed. Please retry." };
+  }
+  const wraps = Array.isArray(rotation.wraps) ? rotation.wraps : [];
+  const memberIds = newMembers.map((member) => id(member._id || member));
+  const wrapIds = wraps.map((wrap) => String(wrap.userId));
+  if (
+    wrapIds.length !== memberIds.length ||
+    new Set(wrapIds).size !== wrapIds.length ||
+    !memberIds.every((memberId) => wrapIds.includes(memberId))
+  ) {
+    return { ok: false, message: "Key wraps must cover exactly the new member list." };
+  }
+  for (const wrap of wraps) {
+    if (typeof wrap.wrappedKey !== "string" || !wrap.wrappedKey || wrap.wrappedKey.length > 2000) {
+      return { ok: false, message: "Invalid key wrap." };
+    }
+  }
+  const wrapperPublicKey = String(rotation.wrapperPublicKey || "");
+  if (
+    !wrapperPublicKey ||
+    wrapperPublicKey.length > 512 ||
+    !/^[A-Za-z0-9+/=_-]+$/.test(wrapperPublicKey)
+  ) {
+    return { ok: false, message: "Invalid wrapper public key." };
+  }
+  return {
+    ok: true,
+    apply: true,
+    version: expectedVersion + 1,
+    wrapperPublicKey,
+    wraps: wraps.map((wrap) => ({ userId: wrap.userId, wrappedKey: wrap.wrappedKey })),
+  };
+}
+
+async function applyKeyRotation(group, rotation) {
+  group.keyVersion = rotation.version;
+  const next = [
+    ...(group.keyWraps || []),
+    {
+      version: rotation.version,
+      wrapperPublicKey: rotation.wrapperPublicKey,
+      wraps: rotation.wraps,
+    },
+  ];
+  // Retain every key version still referenced by a stored message so history
+  // stays readable; drop only versions no message uses anymore.
+  const oldestUsed = await Message.findOne({ groupId: group._id, keyVersion: { $gt: 0 } })
+    .sort({ keyVersion: 1 })
+    .select("keyVersion")
+    .lean();
+  const cutoff = oldestUsed?.keyVersion ?? rotation.version;
+  group.keyWraps = next.filter((entry) => entry.version >= cutoff);
+}
+
+// Drop wrapped keys of people who are no longer members (hygiene when a
+// membership change ships without a rotation; the next sender rotates lazily).
+function pruneKeyWraps(group) {
+  const memberIds = new Set(group.members.map((member) => id(member._id || member)));
+  group.keyWraps = (group.keyWraps || []).map((entry) => ({
+    version: entry.version,
+    wrapperPublicKey: entry.wrapperPublicKey,
+    wraps: (entry.wraps || []).filter((wrap) => memberIds.has(String(wrap.userId))),
+  }));
 }
 
 const broadcast = (group) => {
@@ -75,16 +162,17 @@ export async function getGroupMessages(req, res) {
   try {
     const group = await findMemberGroup(req.params.id, req.userId);
     if (!group) return res.status(404).json({ message: "Group not found." });
-    const filter = { groupId: group._id, deletedFor: { $nin: [req.userId] } };
+    const now = new Date();
+    const filter = { groupId: group._id, deletedFor: { $nin: [req.userId] }, $and: [{ $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] }] };
     if (req.query.paginated !== "true") {
-      const messages = await Message.find(filter).populate("senderId", "fullName username profilePic")
-        .populate("replyTo", "text image video audio file fileName senderId").sort({ createdAt: 1 }).limit(100);
+      const messages = await Message.find(filter).populate("senderId", "fullName username profilePic privacy")
+        .populate("replyTo", "text ciphertext iv keyVersion mediaIv image video audio file fileName senderId").sort({ createdAt: 1 }).limit(100);
       return res.json(presentMessagesMedia(messages));
     }
     const { limit, before } = getPageOptions(req);
-    if (before) filter.$and = [{ $or: [{ createdAt: { $lt: before.createdAt } }, { createdAt: before.createdAt, _id: { $lt: before.id } }] }];
-    const page = await Message.find(filter).populate("senderId", "fullName username profilePic")
-      .populate("replyTo", "text image video audio file fileName senderId").sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
+    if (before) filter.$and.push({ $or: [{ createdAt: { $lt: before.createdAt } }, { createdAt: before.createdAt, _id: { $lt: before.id } }] });
+    const page = await Message.find(filter).populate("senderId", "fullName username profilePic privacy")
+      .populate("replyTo", "text ciphertext iv keyVersion mediaIv image video audio file fileName senderId").sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
     const hasMore = page.length > limit;
     const messages = (hasMore ? page.slice(0, limit) : page).reverse();
     res.json({ messages: presentMessagesMedia(messages), hasMore, nextCursor: hasMore ? makeCursor(messages[0]) : null });
@@ -103,7 +191,17 @@ export async function sendGroupMessage(req, res) {
     }
     const mediaFile = req.file;
     const text = String(req.body.text || "").trim();
-    if (!text && !mediaFile) return res.status(400).json({ message: "Message text or media is required." });
+    // E2EE: encrypted payload (client-side). ciphertext/iv carry the text,
+    // mediaIv carries the IV for encrypted media bytes, keyVersion selects the
+    // group key. The server stores them opaquely.
+    const ciphertext = String(req.body.ciphertext || "");
+    const iv = String(req.body.iv || "");
+    const mediaIv = String(req.body.mediaIv || "");
+    const keyVersion = Number(req.body.keyVersion) || 0;
+    if (keyVersion < 0 || !Number.isInteger(keyVersion)) {
+      return res.status(400).json({ message: "Invalid key version." });
+    }
+    if (!text && !(ciphertext && iv) && !mediaFile) return res.status(400).json({ message: "Message text or media is required." });
     // Idempotency: a retried send carries the same clientId, so return the
     // already-created message instead of minting a duplicate.
     const rawClientId = req.body.clientId;
@@ -112,8 +210,8 @@ export async function sendGroupMessage(req, res) {
       const existing = await Message.findOne({ senderId: req.userId, clientId });
       if (existing) {
         const populatedExisting = await Message.findById(existing._id)
-          .populate("senderId", "fullName username profilePic")
-          .populate("replyTo", "text image video audio file fileName senderId");
+          .populate("senderId", "fullName username profilePic privacy")
+          .populate("replyTo", "text ciphertext iv keyVersion mediaIv image video audio file fileName senderId");
         return res.status(200).json(presentMessageMedia(populatedExisting));
       }
     }
@@ -121,8 +219,14 @@ export async function sendGroupMessage(req, res) {
     if (mediaFile) {
       if (!hasImagekitConfig()) return res.status(503).json({ message: "Media upload is not configured." });
       const { filePath, fileId } = await uploadChatMedia(mediaFile);
-      const kind = mediaFile.mimetype.startsWith("image") ? "image" : mediaFile.mimetype.startsWith("video") ? "video" : mediaFile.mimetype.startsWith("audio") ? "audio" : "file";
-      media = { [kind]: filePath, [`${kind}FileId`]: fileId, fileName: mediaFile.originalname, fileType: mediaFile.mimetype, fileSize: mediaFile.size };
+      // E2EE: for client-encrypted uploads the bytes are opaque ciphertext, so
+      // the client tells us the real kind/type instead of the octet-stream wrapper.
+      const declaredKind = String(req.body.mediaKind || "");
+      const kind = ["image", "video", "audio", "file"].includes(declaredKind)
+        ? declaredKind
+        : mediaFile.mimetype.startsWith("image") ? "image" : mediaFile.mimetype.startsWith("video") ? "video" : mediaFile.mimetype.startsWith("audio") ? "audio" : "file";
+      const originalFileType = String(req.body.originalFileType || mediaFile.mimetype);
+      media = { [kind]: filePath, [`${kind}FileId`]: fileId, fileName: mediaFile.originalname, fileType: originalFileType, fileSize: mediaFile.size };
     }
 
     // A reply target must exist and live in THIS group. Without this check a
@@ -133,6 +237,9 @@ export async function sendGroupMessage(req, res) {
       const repliedMessage = await Message.findById(req.body.replyTo);
       if (!repliedMessage) {
         return res.status(400).json({ message: "Invalid reply message." });
+      }
+      if (repliedMessage.expiresAt && repliedMessage.expiresAt <= new Date()) {
+        return res.status(400).json({ message: "That message has expired." });
       }
       const inSameGroup = repliedMessage.groupId && String(repliedMessage.groupId) === String(group._id);
       const requesterIsParticipant = repliedMessage.groupId
@@ -146,10 +253,25 @@ export async function sendGroupMessage(req, res) {
       validReplyTo = repliedMessage._id;
     }
 
-    const message = await Message.create({ senderId: req.userId, groupId: group._id, text, replyTo: validReplyTo, clientId: clientId || undefined, ...media });
+    // Forwarded marker: the client re-sends decrypted content as a new message
+    // (it cannot reuse ciphertext — that was encrypted for other recipients).
+    let forwardedFrom = null;
+    if (req.body.isForwarded && req.body.forwardedFrom) {
+      const fwdOriginal = await Message.findById(req.body.forwardedFrom);
+      const canForward = fwdOriginal && (
+        fwdOriginal.groupId
+          ? await Group.exists({ _id: fwdOriginal.groupId, members: req.userId })
+          : [fwdOriginal.senderId, fwdOriginal.receiverId].some(
+              (participant) => participant && String(participant) === String(req.userId)
+            )
+      );
+      if (canForward) forwardedFrom = fwdOriginal._id;
+    }
+
+    const message = await Message.create({ senderId: req.userId, groupId: group._id, text, ciphertext, iv, mediaIv, keyVersion, replyTo: validReplyTo, clientId: clientId || undefined, expiresAt: expiryDateFor(group.disappearingDuration), isForwarded: Boolean(forwardedFrom), forwardedFrom, ...media });
     const populated = await Message.findById(message._id)
-      .populate("senderId", "fullName username profilePic")
-      .populate("replyTo", "text image video audio file fileName senderId");
+      .populate("senderId", "fullName username profilePic privacy")
+      .populate("replyTo", "text ciphertext iv keyVersion mediaIv image video audio file fileName senderId");
     const sockets = groupSocketIds(group);
     if (sockets.length) io.to(sockets).emit("newMessage", presentMessageMedia(populated));
     await Group.updateOne({ _id: group._id }, { $set: { updatedAt: new Date() } });
@@ -164,8 +286,14 @@ export async function getGroupMedia(req, res) {
   try {
     const group = await findMemberGroup(req.params.id, req.userId);
     if (!group) return res.status(404).json({ message: "Group not found." });
-    const messages = await Message.find({ groupId: group._id, deletedFor: { $nin: [req.userId] }, $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }] })
-      .select("image video audio file fileName fileType fileSize senderId createdAt").sort({ createdAt: -1 }).limit(60);
+    const messages = await Message.find({
+      $and: [
+        { groupId: group._id, deletedFor: { $nin: [req.userId] } },
+        { $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }] },
+        { $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] },
+      ],
+    })
+      .select("image video audio file fileName fileType fileSize senderId createdAt keyVersion mediaIv").sort({ createdAt: -1 }).limit(60);
     res.json(presentMessagesMedia(messages));
   } catch (error) { res.status(500).json({ message: "Internal server error" }); }
 }
@@ -191,6 +319,62 @@ export async function getGroupDetails(req, res) {
     res.json(sanitizeGroup(group));
   } catch (error) {
     console.log("Error in getGroupDetails:", error.message);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+// Group E2EE: return the requester's wrapped copy of a group key version.
+// The server never sees the plaintext key — unwrapping happens client-side.
+// Defaults to the latest version; pass ?version=N for history.
+export async function getMyGroupKey(req, res) {
+  try {
+    const group = await Group.findOne({ _id: req.params.id, members: req.userId })
+      .select("keyVersion keyWraps");
+    if (!group) return res.status(404).json({ message: "Group not found." });
+    if (!group.keyVersion) return res.status(404).json({ message: "This group is not encrypted yet." });
+    const wantVersion = Number(req.query.version) || group.keyVersion;
+    const entry = (group.keyWraps || []).find((candidate) => candidate.version === wantVersion);
+    if (!entry) return res.status(404).json({ message: "No key available for that version." });
+    const wrap = (entry.wraps || []).find(
+      (candidate) => String(candidate.userId) === String(req.userId)
+    );
+    if (!wrap) return res.status(404).json({ message: "No key available for you in this group." });
+    res.json({
+      keyVersion: entry.version,
+      wrappedKey: wrap.wrappedKey,
+      wrapperPublicKey: entry.wrapperPublicKey || "",
+    });
+  } catch (error) {
+    console.log("Error in getMyGroupKey:", error.message);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+// Group E2EE: standalone key rotation (used for lazy rotation before sending
+// when the member set no longer matches the key coverage).
+export async function rotateGroupKey(req, res) {
+  try {
+    const group = await Group.findOne({ _id: req.params.id, members: req.userId });
+    if (!group) return res.status(404).json({ message: "Group not found." });
+    const rotation = validateKeyRotation(group, req.body, group.members);
+    if (!rotation.ok) {
+      return res.status(rotation.conflict ? 409 : 400).json({ message: rotation.message, keyVersion: group.keyVersion || 0 });
+    }
+    if (!rotation.apply) {
+      return res.status(400).json({ message: "Key rotation data is required." });
+    }
+    await applyKeyRotation(group, rotation);
+    await group.save();
+    const result = await populate(Group.findById(group._id));
+    const sanitized = sanitizeGroup(result);
+    broadcastToGroup(result, "group:key-rotated", {
+      groupId: group._id,
+      keyVersion: sanitized.keyVersion,
+      keyHolders: sanitized.keyHolders,
+    });
+    res.json({ keyVersion: sanitized.keyVersion, keyHolders: sanitized.keyHolders });
+  } catch (error) {
+    console.log("Error in rotateGroupKey:", error.message);
     res.status(500).json({ message: "Internal server error" });
   }
 }
@@ -231,6 +415,15 @@ export async function createGroup(req, res) {
         .status(400)
         .json({ message: "Groups are limited to 256 members." });
     }
+    // Optional E2EE bootstrap: the creator wraps the fresh group key for every
+    // member client-side; the server only stores the opaque wrapped copies.
+    const bootstrapRotation = req.body.keyWraps
+      ? { expectedVersion: 0, wrapperPublicKey: req.body.keyWrapperPublicKey, wraps: req.body.keyWraps }
+      : null;
+    const bootstrap = validateKeyRotation({ keyVersion: 0 }, bootstrapRotation, members);
+    if (!bootstrap.ok) {
+      return res.status(400).json({ message: bootstrap.message });
+    }
     const group = await Group.create({
       name,
       profilePic: req.body.profilePic || "",
@@ -238,6 +431,16 @@ export async function createGroup(req, res) {
       members,
       admins: [req.userId],
       createdBy: req.userId,
+      ...(bootstrap.apply
+        ? {
+            keyVersion: bootstrap.version,
+            keyWraps: [{
+              version: bootstrap.version,
+              wrapperPublicKey: bootstrap.wrapperPublicKey,
+              wraps: bootstrap.wraps,
+            }],
+          }
+        : {}),
     });
 
     const result = await populate(Group.findById(group._id));
@@ -256,6 +459,21 @@ export async function updateGroup(req, res) {
       members: req.userId,
     });
     if (!group) return res.status(404).json({ message: "Group not found." });
+
+    // Disappearing-message timer: any member may change it (WhatsApp-style).
+    // It is handled separately from the admin-gated info fields below.
+    if (req.body.disappearingDuration !== undefined) {
+      const duration = Number(req.body.disappearingDuration);
+      if (!isValidDisappearingDuration(duration)) {
+        return res.status(400).json({ message: "Invalid duration." });
+      }
+      group.disappearingDuration = duration;
+      await group.save();
+      const updated = await populate(Group.findById(group._id));
+      broadcast(updated);
+      return res.json(sanitizeGroup(updated));
+    }
+
     if (!isAdmin(group, req.userId) && group.permissions.editInfo !== "members") {
       return res.status(403).json({ message: "Not allowed to edit group info." });
     }
@@ -354,6 +572,15 @@ export async function addMembers(req, res) {
     }
 
     group.members = [...group.members, ...newMembers];
+    // E2EE: the adder rotates the group key atomically with the membership
+    // change, so new members receive a wrapped copy of the fresh key and can
+    // only read messages sent from here on.
+    const rotation = validateKeyRotation(group, req.body.keyRotation, group.members);
+    if (!rotation.ok) {
+      return res.status(rotation.conflict ? 409 : 400).json({ message: rotation.message, keyVersion: group.keyVersion || 0 });
+    }
+    if (rotation.apply) await applyKeyRotation(group, rotation);
+    else pruneKeyWraps(group);
     await group.save();
 
     const result = await populate(Group.findById(group._id));
@@ -396,6 +623,14 @@ export async function removeMember(req, res) {
 
     group.members = group.members.filter((m) => id(m) !== targetId);
     group.admins = group.admins.filter((a) => id(a) !== targetId);
+    // E2EE: rotate the key atomically so the removed member cannot read
+    // messages sent after their removal.
+    const rotation = validateKeyRotation(group, req.body.keyRotation, group.members);
+    if (!rotation.ok) {
+      return res.status(rotation.conflict ? 409 : 400).json({ message: rotation.message, keyVersion: group.keyVersion || 0 });
+    }
+    if (rotation.apply) await applyKeyRotation(group, rotation);
+    else pruneKeyWraps(group);
     await group.save();
 
     const result = await populate(Group.findById(group._id));
@@ -432,6 +667,11 @@ export async function leaveGroup(req, res) {
 
     group.members = group.members.filter((member) => id(member) !== id(req.userId));
     group.admins = group.admins.filter((admin) => id(admin) !== id(req.userId));
+    // E2EE: best-effort rotation so the leaver cannot read later messages.
+    // If the leaver's client never synced the key, the next sender rotates lazily.
+    const rotation = validateKeyRotation(group, req.body.keyRotation, group.members);
+    if (rotation.ok && rotation.apply) await applyKeyRotation(group, rotation);
+    else pruneKeyWraps(group);
     await group.save();
 
     const result = await populate(Group.findById(group._id));

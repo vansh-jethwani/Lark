@@ -1,5 +1,6 @@
 import webpush from "web-push";
 import User from "../models/user.model.js";
+import { applyPhotoPrivacy } from "./privacy.js";
 
 function isPushConfigured() {
   return Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT);
@@ -28,8 +29,10 @@ async function removeInvalidSubscription(userId, endpoint) {
 export async function sendPushToUser(userId, payload) {
   if (!configureWebPush()) return { sent: 0, skipped: "not-configured" };
 
-  const user = await User.findById(userId).select("pushSubscriptions").lean();
+  const user = await User.findById(userId).select("pushSubscriptions notificationPrefs").lean();
   if (!user?.pushSubscriptions?.length) return { sent: 0, skipped: "no-subscriptions" };
+  // The user turned push notifications off in Settings → Notifications.
+  if (user.notificationPrefs?.pushEnabled === false) return { sent: 0, skipped: "disabled" };
 
   const subscriptions = [...new Map(user.pushSubscriptions.map((subscription) => [subscription.endpoint, subscription])).values()];
   const body = JSON.stringify(payload);
@@ -46,6 +49,7 @@ export async function sendPushToUser(userId, payload) {
 }
 
 export async function sendMessageNotification({ receiverId, sender, message }) {
+  sender = applyPhotoPrivacy(sender);
   return sendPushToUser(receiverId, {
     type: "message",
     title: sender.fullName || "New message",
@@ -59,6 +63,7 @@ export async function sendMessageNotification({ receiverId, sender, message }) {
 }
 
 export async function sendIncomingCallNotification({ receiverId, caller, callId, callType }) {
+  caller = applyPhotoPrivacy(caller);
   return sendPushToUser(receiverId, {
     type: "call",
     title: caller.fullName || "Incoming call",

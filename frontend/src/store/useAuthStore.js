@@ -106,6 +106,51 @@ export const useAuthStore = create((set, get) => ({
 
   setAuthUser: (authUser) => set({ authUser }),
 
+  // Privacy + notification preferences live on the auth user.
+  updatePrivacy: async (patch) => {
+    try {
+      const res = await axiosInstance.patch("/profile/privacy", patch);
+      set({ authUser: res.data });
+      return true;
+    } catch (error) { return false; }
+  },
+  updateNotificationPrefs: async (patch) => {
+    try {
+      const res = await axiosInstance.patch("/profile/notifications", patch);
+      set({ authUser: res.data });
+      return true;
+    } catch (error) { return false; }
+  },
+
+  // Active sessions (devices). Revoking the current one signs this device out.
+  sessions: [],
+  isSessionsLoading: false,
+  fetchSessions: async () => {
+    set({ isSessionsLoading: true });
+    try {
+      const res = await axiosInstance.get("/auth/sessions");
+      set({ sessions: Array.isArray(res.data) ? res.data : [], isSessionsLoading: false });
+    } catch { set({ sessions: [], isSessionsLoading: false }); }
+  },
+  revokeSession: async (sessionId, { isCurrent = false } = {}) => {
+    try {
+      await axiosInstance.delete(`/auth/sessions/${sessionId}`);
+      if (isCurrent) {
+        get().clearAuth();
+      } else {
+        set((state) => ({ sessions: state.sessions.filter((s) => String(s._id) !== String(sessionId)) }));
+      }
+      return true;
+    } catch { return false; }
+  },
+  revokeOtherSessions: async () => {
+    try {
+      await axiosInstance.post("/auth/sessions/revoke-others");
+      get().fetchSessions();
+      return true;
+    } catch { return false; }
+  },
+
   connectSocket: (user) => {
     if (!user?._id) return;
     const existingSocket = get().socket;

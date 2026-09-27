@@ -22,6 +22,11 @@ const messageSchema = new mongoose.Schema({
     default: "",
     maxlength: 5000
   },
+  // Group E2EE: version of the group key this message was encrypted with.
+  // 0 = plaintext (legacy group messages from before encryption was enabled).
+  keyVersion: { type: Number, default: 0 },
+  // IV used for the encrypted media bytes (text keeps using `iv`).
+  mediaIv: { type: String, default: "", maxlength: 200 },
   image: {
     type: String,
   },
@@ -93,6 +98,14 @@ const messageSchema = new mongoose.Schema({
   isEdited: {
     type: Boolean,
     default: false,
+  },
+  // Set when the conversation has disappearing messages enabled. A periodic
+  // job deletes the document (and its ImageKit files) once this passes, and
+  // message reads filter expired documents out in the meantime.
+  expiresAt: {
+    type: Date,
+    default: null,
+    index: true,
   },
   readAt: {
     type: Date,

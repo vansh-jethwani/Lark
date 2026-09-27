@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeftIcon,
+  BanIcon,
+  BellIcon,
   CameraIcon,
   CheckIcon,
   ChevronRightIcon,
+  LaptopIcon,
   LoaderIcon,
   LockIcon,
   LogOutIcon,
   MailIcon,
-  MoonIcon,
   MonitorIcon,
+  MoonIcon,
+  SmartphoneIcon,
   SunIcon,
   Trash2Icon,
   UserIcon,
@@ -22,9 +26,51 @@ import { Link, Navigate } from "react-router";
 import { DeleteAccountModal } from "../components/profile/DeleteAccountModal";
 import { getInitials } from "../hooks/useSelectedConversation";
 import { useAuthStore } from "../store/useAuthStore";
+import { useChatStore } from "../store/useChatStore";
 import { useProfileStore } from "../store/useProfileStore";
 import { applyThemePresetToDocument, useTheme } from "../context/theme";
 import { HERO_UI_THEME_PRESETS } from "../data/herouiThemePresets";
+
+function ToggleSwitch({ on, onToggle, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={Boolean(on)}
+      aria-label={label}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle?.();
+      }}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
+        on ? "bg-accent" : "bg-border"
+      }`}
+    >
+      <span
+        className={`inline-block size-5 transform rounded-full bg-white shadow transition ${
+          on ? "translate-x-5" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
+function formatSessionDate(date) {
+  if (!date) return "Unknown";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "Unknown";
+  return d.toLocaleString();
+}
+
+function friendlyDeviceName(userAgent) {
+  const ua = String(userAgent || "");
+  if (/iPhone|iPad/i.test(ua)) return "iPhone / iPad";
+  if (/Android/i.test(ua)) return "Android device";
+  if (/Windows/i.test(ua)) return "Windows PC";
+  if (/Macintosh|Mac OS/i.test(ua)) return "Mac";
+  if (/Linux/i.test(ua)) return "Linux PC";
+  return ua ? ua.slice(0, 48) : "Unknown device";
+}
 
 function formatJoinDate(date) {
   if (!date) return "Not available";
@@ -443,6 +489,24 @@ export default function ProfileSettingsPage() {
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [editField, setEditField] = useState(null);
+  const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+  const [blockedModalOpen, setBlockedModalOpen] = useState(false);
+  const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
+
+  const updatePrivacy = useAuthStore((state) => state.updatePrivacy);
+  const updateNotificationPrefs = useAuthStore((state) => state.updateNotificationPrefs);
+  const sessions = useAuthStore((state) => state.sessions);
+  const fetchSessions = useAuthStore((state) => state.fetchSessions);
+  const revokeSession = useAuthStore((state) => state.revokeSession);
+  const revokeOtherSessions = useAuthStore((state) => state.revokeOtherSessions);
+  const blockedUsers = useChatStore((state) => state.blockedUsers);
+  const fetchBlockedUsers = useChatStore((state) => state.fetchBlockedUsers);
+  const unblockUser = useChatStore((state) => state.unblockUser);
+
+  useEffect(() => {
+    fetchSessions();
+    fetchBlockedUsers();
+  }, [fetchSessions, fetchBlockedUsers]);
 
   useEffect(() => {
     getProfile();
@@ -647,6 +711,95 @@ export default function ProfileSettingsPage() {
             />
           </SettingSection>
 
+          <SettingSection title="Privacy">
+            <SettingRow
+              icon={UserIcon}
+              label="Profile photo"
+              value={
+                authUser?.privacy?.profilePhoto === "nobody"
+                  ? "Nobody can see your photo"
+                  : "Everyone can see your photo"
+              }
+              onClick={() => setPrivacyModalOpen(true)}
+            />
+            <SettingRow
+              icon={CheckIcon}
+              label="Read receipts"
+              value="Let others see when you've read their messages"
+              rightElement={
+                <ToggleSwitch
+                  on={authUser?.privacy?.readReceipts !== false}
+                  onToggle={() =>
+                    updatePrivacy({
+                      readReceipts: !(authUser?.privacy?.readReceipts !== false),
+                    })
+                  }
+                  label="Toggle read receipts"
+                />
+              }
+            />
+          </SettingSection>
+
+          <SettingSection title="Notifications">
+            <SettingRow
+              icon={BellIcon}
+              label="Message sound"
+              value="Play a sound for new messages"
+              rightElement={
+                <ToggleSwitch
+                  on={authUser?.notificationPrefs?.messageSound !== false}
+                  onToggle={() =>
+                    updateNotificationPrefs({
+                      messageSound: !(authUser?.notificationPrefs?.messageSound !== false),
+                    })
+                  }
+                  label="Toggle message sound"
+                />
+              }
+            />
+            <SettingRow
+              icon={BellIcon}
+              label="Push notifications"
+              value="Show notifications when the app is closed"
+              rightElement={
+                <ToggleSwitch
+                  on={authUser?.notificationPrefs?.pushEnabled !== false}
+                  onToggle={() =>
+                    updateNotificationPrefs({
+                      pushEnabled: !(authUser?.notificationPrefs?.pushEnabled !== false),
+                    })
+                  }
+                  label="Toggle push notifications"
+                />
+              }
+            />
+          </SettingSection>
+
+          <SettingSection title="Blocked">
+            <SettingRow
+              icon={BanIcon}
+              label="Blocked users"
+              value={
+                blockedUsers.length > 0
+                  ? `${blockedUsers.length} blocked`
+                  : "No blocked users"
+              }
+              onClick={() => setBlockedModalOpen(true)}
+            />
+          </SettingSection>
+
+          <SettingSection title="Devices">
+            <SettingRow
+              icon={SmartphoneIcon}
+              label="Active sessions"
+              value="See every device signed in to your account"
+              onClick={() => {
+                fetchSessions();
+                setSessionsModalOpen(true);
+              }}
+            />
+          </SettingSection>
+
           <SettingSection title="Appearance">
             <SettingRow
               icon={PaletteIcon}
@@ -772,6 +925,125 @@ export default function ProfileSettingsPage() {
         onClose={() => setDeleteModalOpen(false)}
         onConfirm={handleDeleteAccount}
       />
+
+      <PopupModal
+        open={privacyModalOpen}
+        title="Profile photo"
+        onClose={() => setPrivacyModalOpen(false)}
+      >
+        {[
+          { value: "everyone", label: "Everyone", hint: "Anyone on Lark can see your photo" },
+          { value: "nobody", label: "Nobody", hint: "Your photo is hidden from everyone" },
+        ].map((option) => {
+          const selected = (authUser?.privacy?.profilePhoto || "everyone") === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={async () => {
+                await updatePrivacy({ profilePhoto: option.value });
+                setPrivacyModalOpen(false);
+              }}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-surface"
+            >
+              <span className={`grid size-5 shrink-0 place-items-center rounded-full border ${selected ? "border-accent" : "border-border"}`}>
+                {selected && <span className="size-2.5 rounded-full bg-accent" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">{option.label}</span>
+                <span className="block text-xs text-muted">{option.hint}</span>
+              </span>
+            </button>
+          );
+        })}
+      </PopupModal>
+
+      <PopupModal
+        open={blockedModalOpen}
+        title="Blocked users"
+        onClose={() => setBlockedModalOpen(false)}
+      >
+        {blockedUsers.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-muted">
+            You haven't blocked anyone. Blocked users can't message or call you.
+          </p>
+        ) : (
+          blockedUsers.map((user) => (
+            <div key={user._id} className="flex items-center gap-3 px-4 py-3">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{user.fullName}</span>
+                {user.username && (
+                  <span className="block truncate text-xs text-muted">@{user.username}</span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => unblockUser(user._id)}
+                className="shrink-0 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-surface"
+              >
+                Unblock
+              </button>
+            </div>
+          ))
+        )}
+      </PopupModal>
+
+      <PopupModal
+        open={sessionsModalOpen}
+        title="Active sessions"
+        onClose={() => setSessionsModalOpen(false)}
+        footer={
+          sessions.length > 1 ? (
+            <button
+              type="button"
+              onClick={async () => {
+                if (await revokeOtherSessions()) setSessionsModalOpen(false);
+              }}
+              className="w-full rounded-full border border-red-500/40 px-4 py-2 text-sm font-medium text-red-500 transition hover:bg-red-500/10"
+            >
+              Sign out all other devices
+            </button>
+          ) : null
+        }
+      >
+        {sessions.length === 0 ? (
+          <p className="px-4 py-6 text-center text-sm text-muted">No active sessions found.</p>
+        ) : (
+          sessions.map((session) => (
+            <div key={session._id} className="flex items-center gap-3 px-4 py-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
+                {/Mobile|Android|iPhone|iPad/i.test(session.userAgent || "") ? (
+                  <SmartphoneIcon className="size-5" />
+                ) : (
+                  <LaptopIcon className="size-5" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">
+                  {friendlyDeviceName(session.userAgent)}
+                  {session.isCurrent && (
+                    <span className="ml-2 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-accent">
+                      This device
+                    </span>
+                  )}
+                </span>
+                <span className="block truncate text-xs text-muted">
+                  {session.ip ? `${session.ip} · ` : ""}Last active {formatSessionDate(session.lastSeenAt)}
+                </span>
+              </span>
+              {!session.isCurrent && (
+                <button
+                  type="button"
+                  onClick={() => revokeSession(session._id)}
+                  className="shrink-0 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-500/10"
+                >
+                  Revoke
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </PopupModal>
     </div>
   );
 }

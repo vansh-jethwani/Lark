@@ -1,11 +1,14 @@
 import User from "../models/user.model.js";
 import Message from "../models/message.model.js";
 import Group from "../models/group.model.js";
-import { hasImagekitConfig, uploadChatMedia } from "../lib/imagekit.js";
+import ConversationSetting, { dmSettingKey } from "../models/conversationSetting.model.js";
+import { hasImagekitConfig, uploadChatMedia, deleteChatMedia } from "../lib/imagekit.js";
 import { presentMessageMedia, presentMessagesMedia } from "../lib/media.js";
 import { getReceiverSocketId, io, isUserOnline } from "../lib/socket.js";
 import { sendMessageNotification } from "../lib/notifications.js";
 import { safeCache } from "../lib/redis.js";
+import { applyPhotoPrivacyToList } from "../lib/privacy.js";
+import { expiryDateFor, isValidDisappearingDuration, notExpiredFilter } from "../lib/disappearing.js";
 
 const MESSAGE_POPULATE = "text image video audio file fileName senderId";
 const DEFAULT_MESSAGE_PAGE_SIZE = 40;
@@ -35,6 +38,23 @@ async function isMessageParticipant(message, userId) {
     );
 }
 
+function readReceiptsEnabled(user) {
+    return user?.privacy?.readReceipts !== false;
+}
+
+// Expired disappearing messages must never be returned by reads, even if the
+// cleanup cron hasn't deleted the documents yet.
+function notExpiredClause() {
+    return notExpiredFilter();
+}
+
+async function dmDisappearingDuration(userIdA, userIdB) {
+    const setting = await ConversationSetting.findOne({ key: dmSettingKey(userIdA, userIdB) })
+        .select("disappearingDuration")
+        .lean();
+    return Number(setting?.disappearingDuration) || 0;
+}
+
 async function getMessageSocketIds(message) {
     if (message.groupId) {
         const group = await Group.findById(message.groupId).select("members");
@@ -59,6 +79,7 @@ export async function getSharedMedia(req, res) {
             $and: [
                 { $or: [{ senderId: userId, receiverId: peerId }, { senderId: peerId, receiverId: userId }] },
                 { $or: [{ image: { $ne: "" } }, { video: { $ne: "" } }, { audio: { $ne: "" } }, { file: { $ne: "" } }] },
+                { $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] },
             ],
             deletedFor: { $nin: [userId] },
         }).select("image video audio file fileName fileType fileSize senderId createdAt").sort({ createdAt: -1 }).limit(60);
@@ -71,6 +92,9 @@ export async function getFreshMediaUrl(req, res) {
         const message = await Message.findById(req.params.id);
         const type = req.params.type;
         if (!message || !["image", "video", "audio", "file"].includes(type)) {
+            return res.status(404).json({ message: "Media not found." });
+        }
+        if (message.expiresAt && message.expiresAt <= new Date()) {
             return res.status(404).json({ message: "Media not found." });
         }
         if (!(await isMessageParticipant(message, req.userId))) {
@@ -112,6 +136,12 @@ export async function getUsersForSidebar(req, res) {
             return res.status(200).json([]);
         }
 
+        // Users you blocked don't show up in your search. (Users who blocked
+        // you still appear — hiding them would reveal the block; messaging
+        // them fails with a generic error instead.)
+        const blockedByMe = (req.user.blockedUsers || []).map((id) => String(id));
+        const hiddenIds = [String(loggedInUser), ...blockedByMe];
+
         const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(query);
 
         let filter;
@@ -119,7 +149,7 @@ export async function getUsersForSidebar(req, res) {
         if (isEmail) {
             // Exact email search
             filter = {
-                _id: { $ne: loggedInUser },
+                _id: { $nin: hiddenIds },
                 email: query.toLowerCase(),
             };
         } else {
@@ -134,7 +164,7 @@ export async function getUsersForSidebar(req, res) {
             );
 
             filter = {
-                _id: { $ne: loggedInUser },
+                _id: { $nin: hiddenIds },
                 username: {
                     $regex: `^${safeQuery}`,
                     $options: "i",
@@ -143,11 +173,13 @@ export async function getUsersForSidebar(req, res) {
         }
 
         const filteredUsers = await User.find(filter)
-            .select("_id fullName username profilePic publicKey")
+            .select("_id fullName username profilePic publicKey privacy")
             .limit(20)
             .lean();
 
-        res.status(200).json(filteredUsers);
+        // Honor profile-photo privacy: users who chose "nobody" appear with
+        // no photo in search results.
+        res.status(200).json(applyPhotoPrivacyToList(filteredUsers));
     } catch (error) {
         console.log(
             "Error in getUsersForSidebar: ",
@@ -184,12 +216,12 @@ export async function getConversationsForSidebar(req, res) {
             {
                 $facet: {
                     sent: [
-                        { $match: { senderId: loggedInUser, deletedFor: { $nin: [loggedInUser] } } },
+                        { $match: { senderId: loggedInUser, deletedFor: { $nin: [loggedInUser] }, $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] } },
                         { $sort: { createdAt: -1 } },
                         { $group: { _id: "$receiverId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
                     ],
                     received: [
-                        { $match: { receiverId: loggedInUser, deletedFor: { $nin: [loggedInUser] } } },
+                        { $match: { receiverId: loggedInUser, deletedFor: { $nin: [loggedInUser] }, $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] } },
                         { $sort: { createdAt: -1 } },
                         { $group: { _id: "$senderId", lastMessage: { $first: "$ROOT" }, lastMessageAt: { $first: "$createdAt" } } }
                     ]
@@ -221,6 +253,13 @@ export async function getConversationsForSidebar(req, res) {
                                         { $eq: ["$senderId", "$partnerId"] },
                                         { $eq: ["$receiverId", loggedInUser] },
                                         { $eq: ["$readAt", null] },
+                                        // Expired disappearing messages are not "unread".
+                                        {
+                                            $or: [
+                                                { $eq: ["$expiresAt", null] },
+                                                { $gt: ["$expiresAt", "$$NOW"] },
+                                            ],
+                                        },
                                     ],
                                 },
                                 // A message the reader deleted for themselves is not "unread".
@@ -255,7 +294,15 @@ export async function getConversationsForSidebar(req, res) {
                 $project: {
                     fullName: 1,
                     username: 1,
-                    profilePic: 1,
+                    // Profile-photo privacy: blank the photo when the owner
+                    // chose "nobody".
+                    profilePic: {
+                        $cond: [
+                            { $eq: ["$user.privacy.profilePhoto", "nobody"] },
+                            "",
+                            "$user.profilePic",
+                        ],
+                    },
                     publicKey: 1,
                     unreadCount: 1,
                     lastMessageAt: 1,
@@ -303,12 +350,16 @@ export async function getMessages(req, res) {
             const cached = await safeCache.get(cacheKey);
             if (cached) {
                 // Fire-and-forget read receipts — don't block the response
-                markUnreadMessagesAsRead(senderId, receiverId).catch(() => {});
+                if (readReceiptsEnabled(req.user)) {
+                    markUnreadMessagesAsRead(senderId, receiverId).catch(() => {});
+                }
                 return res.status(200).json(cached);
             }
         }
 
-        await markUnreadMessagesAsRead(senderId, receiverId);
+        if (readReceiptsEnabled(req.user)) {
+            await markUnreadMessagesAsRead(senderId, receiverId);
+        }
 
         const filter = {
             $or: [
@@ -316,6 +367,7 @@ export async function getMessages(req, res) {
                 { senderId: receiverId, receiverId: senderId },
             ],
             deletedFor: { $nin: [senderId] },
+            $and: [notExpiredClause()],
         };
 
         // The legacy array response remains available unless a client opts into pagination.
@@ -326,12 +378,12 @@ export async function getMessages(req, res) {
 
         const { limit, before } = getPageOptions(req);
         if (before) {
-            filter.$and = [{
+            filter.$and.push({
                 $or: [
                     { createdAt: { $lt: before.createdAt } },
                     { createdAt: before.createdAt, _id: { $lt: before.id } },
                 ]
-            }];
+            });
         }
         const page = await Message.find(filter).populate("replyTo", MESSAGE_POPULATE)
             .sort({ createdAt: -1, _id: -1 }).limit(limit + 1);
@@ -354,6 +406,7 @@ async function markUnreadMessagesAsRead(readerId, conversationPartnerId) {
         senderId: conversationPartnerId,
         receiverId: readerId,
         readAt: null,
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
     }).select("_id");
 
     if (unreadMessages.length === 0) return [];
@@ -399,6 +452,11 @@ export async function markConversationAsRead(req, res) {
         const { id: conversationPartnerId } = req.params;
         const readerId = req.userId;
 
+        // Read receipts disabled: never mark, never emit.
+        if (!readReceiptsEnabled(req.user)) {
+            return res.status(200).json({ messageIds: [] });
+        }
+
         const messageIds = await markUnreadMessagesAsRead(readerId, conversationPartnerId);
         await invalidateChatCache(readerId, conversationPartnerId);
 
@@ -414,8 +472,16 @@ export async function sendMessage(req, res) {
         const { text, ciphertext, iv, replyTo, clientId: rawClientId } = req.body;
         const { id: receiverId } = req.params;
         const senderId = req.userId;
-        const receiver = await User.exists({ _id: receiverId });
+        const receiver = await User.findById(receiverId).select("_id blockedUsers");
         if (!receiver) return res.status(404).json({ message: "User not found." });
+
+        // Blocked in either direction: no messages. The 403 message is
+        // generic so blocking stays private.
+        const iBlockedThem = (req.user.blockedUsers || []).some((id) => String(id) === String(receiverId));
+        const theyBlockedMe = (receiver.blockedUsers || []).some((id) => String(id) === String(senderId));
+        if (iBlockedThem || theyBlockedMe) {
+            return res.status(403).json({ message: "You cannot message this user." });
+        }
 
         // Idempotency: a retried send (network retry, double-tap) carries the
         // same clientId, so return the already-created message instead of
@@ -481,6 +547,12 @@ export async function sendMessage(req, res) {
                 });
             }
 
+            if (repliedMessage.expiresAt && repliedMessage.expiresAt <= new Date()) {
+                return res.status(400).json({
+                    message: "That message has expired.",
+                });
+            }
+
             const canReplyTo = await isMessageParticipant(
                 repliedMessage,
                 senderId
@@ -493,6 +565,18 @@ export async function sendMessage(req, res) {
             }
 
             validReplyTo = repliedMessage._id;
+        }
+
+        const disappearingDuration = await dmDisappearingDuration(senderId, receiverId);
+
+        // Forwarded marker: the client re-sends decrypted content as a new
+        // message (ciphertext can't be reused — it was encrypted for others).
+        let forwardedFrom = null;
+        if (req.body.isForwarded && req.body.forwardedFrom) {
+            const fwdOriginal = await Message.findById(req.body.forwardedFrom);
+            if (fwdOriginal && await isMessageParticipant(fwdOriginal, senderId)) {
+                forwardedFrom = fwdOriginal._id;
+            }
         }
 
         const newMessage = new Message({
@@ -511,6 +595,9 @@ export async function sendMessage(req, res) {
             fileSize: fileSize || 0,
             deliveredAt,
             replyTo: validReplyTo,
+            expiresAt: expiryDateFor(disappearingDuration),
+            isForwarded: Boolean(forwardedFrom),
+            forwardedFrom,
         });
 
         await newMessage.save();
@@ -524,7 +611,8 @@ export async function sendMessage(req, res) {
         }
 
         if (receiverSocketId.length === 0) {
-            const sender = await User.findById(senderId).select("fullName profilePic");
+            const senderDoc = await User.findById(senderId).select("fullName profilePic privacy").lean();
+            const sender = applyPhotoPrivacy(senderDoc);
             if (sender) sendMessageNotification({ receiverId, sender, message: populatedMessage }).catch((error) => console.error("Message push failed:", error.message));
         }
 
@@ -550,6 +638,10 @@ export async function togglePinMessage(req, res) {
 
         if (!(await isMessageParticipant(message, userId))) {
             return res.status(403).json({ message: "Not allowed" });
+        }
+
+        if (!message.isPinned && message.expiresAt && message.expiresAt <= new Date()) {
+            return res.status(400).json({ message: "That message has expired." });
         }
 
         message.isPinned = !message.isPinned;
@@ -605,6 +697,10 @@ export async function forwardMessage(req, res) {
             return res.status(404).json({ message: "Message not found" });
         }
 
+        if (originalMessage.expiresAt && originalMessage.expiresAt <= new Date()) {
+            return res.status(400).json({ message: "That message has expired." });
+        }
+
         if (!(await isMessageParticipant(originalMessage, senderId))) {
             return res.status(403).json({ message: "Not allowed" });
         }
@@ -616,7 +712,9 @@ export async function forwardMessage(req, res) {
         }
 
         const forwardedMessages = [];
-        const senderForNotification = await User.findById(senderId).select("fullName profilePic");
+        const senderForNotification = applyPhotoPrivacy(
+            await User.findById(senderId).select("fullName profilePic privacy").lean()
+        );
 
         for (const targetReceiverId of targetReceiverIds) {
             const receiverSocketIds = getReceiverSocketId(targetReceiverId);
@@ -668,12 +766,8 @@ export async function forwardMessage(req, res) {
 export const editMessage = async (req, res) => {
     try {
         const { id } = req.params;
-        const { text } = req.body;
+        const { text, ciphertext, iv } = req.body;
         const myId = req.userId;
-
-        if (!text || !text.trim()) {
-            return res.status(400).json({ message: "Message text is required" });
-        }
 
         const message = await Message.findById(id);
 
@@ -685,7 +779,21 @@ export const editMessage = async (req, res) => {
             return res.status(403).json({ message: "You can edit only your own message" });
         }
 
-        message.text = text.trim();
+        // E2EE: an encrypted message must stay encrypted — the client
+        // re-encrypts the edited text; never accept a plaintext downgrade.
+        if (message.ciphertext) {
+            if (!ciphertext || !iv) {
+                return res.status(400).json({ message: "Encrypted messages must stay encrypted." });
+            }
+            message.ciphertext = String(ciphertext);
+            message.iv = String(iv);
+            message.text = "";
+        } else {
+            if (!text || !text.trim()) {
+                return res.status(400).json({ message: "Message text is required" });
+            }
+            message.text = text.trim();
+        }
         message.isEdited = true;
 
         await message.save();
@@ -820,3 +928,129 @@ export const deleteMessage = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
+
+// ---------------------------------------------------------------------------
+// Disappearing messages (direct chats)
+// ---------------------------------------------------------------------------
+
+export async function getDisappearing(req, res) {
+    try {
+        const { id: peerId } = req.params;
+        if (String(peerId) === String(req.userId)) {
+            return res.status(400).json({ message: "Invalid conversation." });
+        }
+        const peerExists = await User.exists({ _id: peerId });
+        if (!peerExists) return res.status(404).json({ message: "User not found." });
+        const duration = await dmDisappearingDuration(req.userId, peerId);
+        res.status(200).json({ duration });
+    } catch (error) {
+        console.log("Error in getDisappearing:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+export async function setDisappearing(req, res) {
+    try {
+        const { id: peerId } = req.params;
+        const duration = Number(req.body.duration);
+        if (!isValidDisappearingDuration(duration)) {
+            return res.status(400).json({ message: "Invalid duration." });
+        }
+        if (String(peerId) === String(req.userId)) {
+            return res.status(400).json({ message: "Invalid conversation." });
+        }
+        const peerExists = await User.exists({ _id: peerId });
+        if (!peerExists) return res.status(404).json({ message: "User not found." });
+
+        await ConversationSetting.findOneAndUpdate(
+            { key: dmSettingKey(req.userId, peerId) },
+            { $set: { disappearingDuration: duration } },
+            { upsert: true }
+        );
+
+        // Keep the other party's open info panel in sync.
+        const peerSocketIds = getReceiverSocketId(peerId);
+        if (peerSocketIds.length > 0) {
+            io.to(peerSocketIds).emit("disappearingChanged", {
+                conversationId: String(req.userId),
+                duration,
+            });
+        }
+
+        res.status(200).json({ duration });
+    } catch (error) {
+        console.log("Error in setDisappearing:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expired-message cleanup (run by cron)
+// ---------------------------------------------------------------------------
+
+const MEDIA_FILE_ID_KEYS = ["imageFileId", "videoFileId", "audioFileId", "fileFileId"];
+
+// Deletes messages past expiresAt together with their ImageKit files, and
+// tells connected clients to drop them from open chats immediately. Message
+// reads also filter expired documents, so a missed cron run never leaks
+// content — it only delays physical deletion.
+export async function deleteExpiredMessages(batchSize = 200) {
+    const now = new Date();
+    const expired = await Message.find({ expiresAt: { $lte: now } })
+        .select(["_id", "senderId", "receiverId", "groupId", ...MEDIA_FILE_ID_KEYS].join(" "))
+        .limit(batchSize)
+        .lean();
+    if (expired.length === 0) return 0;
+
+    const fileIds = [];
+    for (const message of expired) {
+        for (const key of MEDIA_FILE_ID_KEYS) {
+            if (message[key]) fileIds.push(message[key]);
+        }
+    }
+    if (fileIds.length > 0 && hasImagekitConfig()) {
+        const results = await Promise.allSettled(fileIds.map((fileId) => deleteChatMedia(fileId)));
+        results.forEach((result, index) => {
+            if (result.status === "rejected") {
+                console.log("Expired-media cleanup failed for", fileIds[index], "-", result.reason?.message || result.reason);
+            }
+        });
+    }
+
+    const ids = expired.map((message) => message._id);
+    await Message.deleteMany({ _id: { $in: ids } });
+
+    // Notify connected participants so open chats drop the messages live.
+    const groupIds = [...new Set(expired.filter((m) => m.groupId).map((m) => String(m.groupId)))];
+    const groupMembers = new Map();
+    if (groupIds.length > 0) {
+        const groups = await Group.find({ _id: { $in: groupIds } }).select("_id members").lean();
+        for (const group of groups) {
+            groupMembers.set(String(group._id), (group.members || []).map(String));
+        }
+    }
+    for (const message of expired) {
+        const userIds = message.groupId
+            ? groupMembers.get(String(message.groupId)) || []
+            : [String(message.senderId), String(message.receiverId)].filter(Boolean);
+        const socketIds = [...new Set(userIds.flatMap((id) => getReceiverSocketId(id)))];
+        if (socketIds.length > 0) {
+            io.to(socketIds).emit("messagesExpired", { messageIds: [String(message._id)] });
+        }
+    }
+
+    // Drop any cached sidebar/history snapshots that still reference the
+    // deleted messages.
+    const dmPairs = expired.filter((m) => !m.groupId && m.senderId && m.receiverId);
+    for (const m of dmPairs) {
+        await invalidateChatCache(String(m.senderId), String(m.receiverId));
+    }
+    const groupUserIds = [...new Set(
+        expired.filter((m) => m.groupId).flatMap((m) => groupMembers.get(String(m.groupId)) || [])
+    )];
+    if (groupUserIds.length > 0) {
+        await Promise.all(groupUserIds.map((id) => safeCache.del(sidebarCacheKey(id))));
+    }
+
+    return expired.length;
+}

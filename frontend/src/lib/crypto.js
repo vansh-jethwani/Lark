@@ -63,7 +63,7 @@ export async function generateKeyPair() {
 }
 
 // Convert ArrayBuffer to Base64
-function arrayBufferToBase64(buffer) {
+export function arrayBufferToBase64(buffer) {
     let binary = "";
     const bytes = new Uint8Array(buffer);
     for (let i = 0; i < bytes.byteLength; i++) {
@@ -73,7 +73,7 @@ function arrayBufferToBase64(buffer) {
 }
 
 // Convert Base64 to ArrayBuffer
-function base64ToArrayBuffer(base64) {
+export function base64ToArrayBuffer(base64) {
     const binary_string = window.atob(base64);
     const len = binary_string.length;
     const bytes = new Uint8Array(len);

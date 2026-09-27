@@ -15,6 +15,7 @@ import {
   VideoIcon,
   VideoOffIcon,
   Volume2Icon,
+  Volume1Icon,
   XIcon,
   MinusIcon,
   RefreshCwIcon,
@@ -41,6 +42,7 @@ import {
   timeLabel
 } from "../../lib/callHistory";
 import { axiosInstance } from "../../lib/axios";
+import { gradeCallQuality } from "../../lib/callQuality.js";
 
 const STUN = "stun:stun.l.google.com:19302";
 
@@ -59,23 +61,33 @@ function buildIceServers() {
   }
   return servers;
 }
-const constraints = (type, facingMode = "user") => ({
-  audio: {
-    echoCancellation: { ideal: true },
-    noiseSuppression: { ideal: true },
-    autoGainControl: { ideal: true },
-    sampleRate: { ideal: 48000 },
-    channelCount: { ideal: 1 },
-    latency: { ideal: 0.02 },
-  },
-  video: type === "video" ? {
-    facingMode: { ideal: facingMode },
-    width: { ideal: 1280, max: 1920 },
-    height: { ideal: 720, max: 1080 },
+// True on phones/tablets. Gates phone-only controls (speaker toggle, camera
+// flip) and picks portrait-friendly camera constraints on mobile sensors.
+const isMobileDevice = () =>
+  typeof navigator !== "undefined" &&
+  /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
 
-    frameRate: { ideal: 30, max: 30 },
-  } : false,
-});
+const constraints = (type, facingMode = "user") => {
+  const mobile = isMobileDevice();
+  return {
+    audio: {
+      echoCancellation: { ideal: true },
+      noiseSuppression: { ideal: true },
+      autoGainControl: { ideal: true },
+      sampleRate: { ideal: 48000 },
+      channelCount: { ideal: 1 },
+      latency: { ideal: 0.02 },
+    },
+    // Phones are held in portrait: requesting landscape forces the browser to
+    // crop the center of the frame, which looks "zoomed in" on the other side.
+    video: type === "video" ? {
+      facingMode: { ideal: facingMode },
+      width: mobile ? { ideal: 720, max: 1080 } : { ideal: 1280, max: 1920 },
+      height: mobile ? { ideal: 1280, max: 1920 } : { ideal: 720, max: 1080 },
+      frameRate: { ideal: 30, max: 30 },
+    } : false,
+  };
+};
 
 async function tuneSender(sender) {
   if (!sender?.getParameters || !sender.setParameters) return;
@@ -136,7 +148,21 @@ function CallTimer({ secondsRef }) {
   return <>{formatCallDuration(seconds)}</>;
 }
 
-function CallStatusLabel({ call, secondsRef }) {
+function CallQualityDot({ quality }) {
+  if (quality === "unknown") return null;
+  const color =
+    quality === "good" ? "bg-emerald-400" : quality === "fair" ? "bg-amber-400" : "bg-red-400";
+  const label = quality === "good" ? "Good connection" : quality === "fair" ? "Fair connection" : "Poor connection";
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`inline-block size-2 rounded-full ${color}`}
+    />
+  );
+}
+
+function CallStatusLabel({ call, secondsRef, quality }) {
   if (!call) return null;
   switch (call.status) {
     case "calling":
@@ -149,10 +175,11 @@ function CallStatusLabel({ call, secondsRef }) {
       return "Reconnecting...";
     case "connected":
       return (
-        <>
+        <span className="inline-flex items-center gap-1.5">
+          <CallQualityDot quality={quality} />
           {call.type === "video" ? "Video call" : "Voice call"} ·{" "}
           <CallTimer secondsRef={secondsRef} />
-        </>
+        </span>
       );
     default:
       return "Call in progress";
@@ -706,7 +733,14 @@ export function CallPanel() {
   const [facingMode, setFacingMode] = useState("user");
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [swappedVideo, setSwappedVideo] = useState(false);
+  // Local preview PiP: which corner it is snapped to, plus live drag offset.
+  const [previewCorner, setPreviewCorner] = useState("bl");
+  const [previewDrag, setPreviewDrag] = useState(null);
+  const previewBoxRef = useRef(null);
+  const previewDragRef = useRef(null);
   const [statusText, setStatusText] = useState("");
+  // Call quality from RTCStats: "good" | "fair" | "poor" | "unknown".
+  const [callQuality, setCallQuality] = useState("unknown");
   // Fix #10: interim "Starting call…" UI shown while getUserMedia resolves.
   const [isStartingCall, setIsStartingCall] = useState(false);
 
@@ -720,6 +754,11 @@ export function CallPanel() {
   const remoteStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
   const candidateQueueRef = useRef([]);
+  // ICE-restart bookkeeping: only the original caller restarts (the callee
+  // answers the restart offer), max 2 attempts, then the call ends.
+  const iceRestartAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef(null);
+  const iceRestartTimeoutRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -760,6 +799,54 @@ export function CallPanel() {
     }
   };
 
+  const clearReconnectTimers = () => {
+    clearTimeout(reconnectTimeoutRef.current);
+    clearTimeout(iceRestartTimeoutRef.current);
+    reconnectTimeoutRef.current = null;
+    iceRestartTimeoutRef.current = null;
+  };
+
+  // ICE restart: renegotiate connectivity without dropping the call. The
+  // original caller restarts first; the callee answers the restart offer
+  // through the normal signal handler, and restarts itself only if the call
+  // is still broken after 12s. After 2 failed attempts the call ends.
+  const attemptIceRestart = async () => {
+    const connection = peerRef.current;
+    const call = callRef.current;
+    if (!connection || !call) {
+      setStatusText("Connection lost. Please try the call again.");
+      finish("failed");
+      return;
+    }
+    if (iceRestartAttemptsRef.current >= 2) {
+      setStatusText("Connection lost. Please try the call again.");
+      finish("failed");
+      return;
+    }
+    iceRestartAttemptsRef.current += 1;
+    try {
+      connection.restartIce();
+      const offer = await connection.createOffer({ iceRestart: true });
+      await connection.setLocalDescription(tuneOpusSdp(offer));
+      socket?.emit("call:signal", {
+        receiverId: call.peer.id,
+        callId: call.id,
+        signal: { description: connection.localDescription },
+      });
+      debug("ICE restart offer sent, attempt", iceRestartAttemptsRef.current);
+      clearTimeout(iceRestartTimeoutRef.current);
+      iceRestartTimeoutRef.current = setTimeout(() => {
+        if (peerRef.current && peerRef.current.connectionState !== "connected") {
+          attemptIceRestart();
+        }
+      }, 10000);
+    } catch (error) {
+      debug("ICE restart failed", error);
+      setStatusText("Connection lost. Please try the call again.");
+      finish("failed");
+    }
+  };
+
   const createPeer = (peer) => {
     const connection = new RTCPeerConnection({
       iceServers: buildIceServers(),
@@ -790,12 +877,30 @@ export function CallPanel() {
     connection.onconnectionstatechange = () => {
       debug("connection state", connection.connectionState);
       if (connection.connectionState === "connected") {
+        clearReconnectTimers();
+        iceRestartAttemptsRef.current = 0;
         setCurrentCall({ ...callRef.current, status: "connected" });
       } else if (connection.connectionState === "disconnected") {
         setCurrentCall({ ...callRef.current, status: "reconnecting" });
+        // Give auto-recovery a few seconds before forcing an ICE restart.
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (peerRef.current?.connectionState === "disconnected") attemptIceRestart();
+        }, 8000);
       } else if (connection.connectionState === "failed") {
-        setStatusText("Connection lost. Please try the call again.");
-        finish("failed");
+        setCurrentCall({ ...callRef.current, status: "reconnecting" });
+        if (callRef.current?.incoming) {
+          // Callee: give the caller a head start on the ICE restart, then
+          // restart from this side if the call is still broken.
+          clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (["failed", "disconnected"].includes(peerRef.current?.connectionState)) {
+              attemptIceRestart();
+            }
+          }, 12000);
+        } else {
+          attemptIceRestart();
+        }
       }
     };
 
@@ -838,10 +943,13 @@ export function CallPanel() {
     remoteStreamRef.current = null;
     screenStreamRef.current = null;
     peerRef.current = null;
+    clearReconnectTimers();
+    iceRestartAttemptsRef.current = 0;
 
     setCurrentCall(null);
     setMinimized(false);
     setMaximized(false);
+    setCallQuality("unknown");
     secondsRef.current = 0;
     setMuted(false);
     setCameraOff(false);
@@ -1031,6 +1139,51 @@ export function CallPanel() {
     return () => window.clearTimeout(timer);
   }, [statusText]);
 
+  // Mobile browsers may block remote-audio playback until the user interacts
+  // with the page. While a call is connected, any tap retries playback on the
+  // remote elements so a blocked first play() never means permanent silence.
+  useEffect(() => {
+    if (call?.status !== "connected") return undefined;
+    const resume = () => {
+      remoteAudioRef.current?.play?.().catch(() => { });
+      remoteVideoRef.current?.play?.().catch(() => { });
+    };
+    window.addEventListener("pointerdown", resume);
+    return () => window.removeEventListener("pointerdown", resume);
+  }, [call?.status]);
+
+  // Call quality indicator: sample WebRTC stats every 2s while connected and
+  // grade the connection from round-trip time, packet loss and jitter.
+  useEffect(() => {
+    if (call?.status !== "connected") return undefined;
+    const id = window.setInterval(async () => {
+      const connection = peerRef.current;
+      if (!connection) return;
+      try {
+        const stats = await connection.getStats();
+        let rtt = null;
+        let lossRate = null;
+        let jitter = null;
+        stats.forEach((report) => {
+          if (report.type === "candidate-pair" && report.state === "succeeded" && report.nominated) {
+            const value = report.currentRoundTripTime ?? report.roundTripTime;
+            if (value != null) rtt = value;
+          }
+          if (report.type === "inbound-rtp" && !report.isRemote) {
+            const lost = report.packetsLost || 0;
+            const total = (report.packetsReceived || 0) + lost;
+            if (total > 0) lossRate = Math.max(lossRate ?? 0, lost / total);
+            if (report.jitter != null) jitter = Math.max(jitter ?? 0, report.jitter);
+          }
+        });
+        setCallQuality(gradeCallQuality({ rtt, lossRate, jitter }));
+      } catch {
+        /* stats unavailable */
+      }
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [call?.status]);
+
   const accept = async () => {
     // Fix #4: ignore double-taps while an accept is already in flight.
     if (acceptingRef.current) return;
@@ -1120,13 +1273,59 @@ export function CallPanel() {
     setCameraOff(next);
   };
 
+const PREVIEW_CORNERS = {
+  tl: "top-4 left-4",
+  tr: "top-4 right-4",
+  bl: "bottom-24 left-4",
+  br: "bottom-24 right-4",
+};
+
+  // Drag the local preview; on release it snaps to the nearest of the four
+  // corners and can never rest in the middle of the screen.
+  const onPreviewPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    previewBoxRef.current?.setPointerCapture?.(event.pointerId);
+    previewDragRef.current = { startX: event.clientX, startY: event.clientY, moved: false };
+    setPreviewDrag({ x: 0, y: 0 });
+  };
+
+  const onPreviewPointerMove = (event) => {
+    const drag = previewDragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (Math.abs(dx) + Math.abs(dy) > 8) drag.moved = true;
+    if (drag.moved) setPreviewDrag({ x: dx, y: dy });
+  };
+
+  const onPreviewPointerUp = (event) => {
+    const drag = previewDragRef.current;
+    previewDragRef.current = null;
+    if (!drag) return;
+    if (!drag.moved) {
+      // Treated as a tap: keep the tap-to-swap-screens behavior.
+      setPreviewDrag(null);
+      setSwappedVideo((prev) => !prev);
+      return;
+    }
+    const rect = previewBoxRef.current?.parentElement?.getBoundingClientRect();
+    let corner = "bl";
+    if (rect) {
+      const vertical = event.clientY - rect.top < rect.height / 2 ? "t" : "b";
+      const horizontal = event.clientX - rect.left < rect.width / 2 ? "l" : "r";
+      corner = `${vertical}${horizontal}`;
+    }
+    setPreviewCorner(corner);
+    setPreviewDrag(null);
+  };
+
   const switchCamera = async () => {
     if (call?.type !== "video" || isScreenSharing) return;
     const nextFacingMode = facingMode === "user" ? "environment" : "user";
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: nextFacingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: constraints("video", nextFacingMode).video,
         audio: false,
       });
       const newTrack = stream.getVideoTracks()[0];
@@ -1264,7 +1463,7 @@ export function CallPanel() {
           </Avatar>
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-semibold text-white">{call.peer.name}</p>
-            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
+            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} quality={callQuality} /></p>
           </div>
           <div className="flex items-center gap-1.5 border-l border-white/10 pl-2">
             <Button
@@ -1302,7 +1501,7 @@ export function CallPanel() {
 
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-semibold text-white">{call.peer.name}</p>
-            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
+            <p className="text-[11px] text-zinc-400"><CallStatusLabel call={call} secondsRef={secondsRef} quality={callQuality} /></p>
           </div>
 
           <div className="flex items-center gap-1.5 border-l border-white/10 pl-2">
@@ -1363,7 +1562,7 @@ export function CallPanel() {
                     </span>
                   </div>
                   <p className="flex items-center gap-1.5 text-xs text-zinc-300/90 font-medium">
-                    <CallStatusLabel call={call} secondsRef={secondsRef} />
+                    <CallStatusLabel call={call} secondsRef={secondsRef} quality={callQuality} />
                   </p>
                 </div>
               </div>
@@ -1418,16 +1617,22 @@ export function CallPanel() {
                         </Avatar>
                       </div>
                       <p className="text-sm font-medium text-zinc-400">
-                        {call.status === "connected" ? "Camera is off" : <CallStatusLabel call={call} secondsRef={secondsRef} />}
+                        {call.status === "connected" ? "Camera is off" : <CallStatusLabel call={call} secondsRef={secondsRef} quality={callQuality} />}
                       </p>
                     </div>
                   )}
 
-                  {/* Local Camera Floating Thumbnail (Picture-in-Picture Box) */}
+                  {/* Local Camera Floating Thumbnail (Picture-in-Picture Box):
+                      starts bottom-left, drags anywhere, snaps to 4 corners only */}
                   <div
-                    onClick={() => setSwappedVideo((prev) => !prev)}
-                    className="absolute bottom-24 right-4 sm:bottom-28 sm:right-6 z-20 h-36 w-28 sm:h-44 sm:w-32 cursor-pointer overflow-hidden rounded-2xl border-2 border-white/20 bg-zinc-900 shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 group"
-                    title="Tap to swap screens"
+                    ref={previewBoxRef}
+                    onPointerDown={onPreviewPointerDown}
+                    onPointerMove={onPreviewPointerMove}
+                    onPointerUp={onPreviewPointerUp}
+                    onPointerCancel={() => { previewDragRef.current = null; setPreviewDrag(null); }}
+                    className={`absolute ${PREVIEW_CORNERS[previewCorner]} z-20 h-36 w-28 sm:h-44 sm:w-32 cursor-grab touch-none select-none overflow-hidden rounded-2xl border-2 border-white/20 bg-zinc-900 shadow-2xl group ${previewDrag ? "cursor-grabbing" : "transition-all duration-300 hover:scale-105 active:scale-95"}`}
+                    style={previewDrag ? { transform: `translate(${previewDrag.x}px, ${previewDrag.y}px)`, zIndex: 30 } : undefined}
+                    title="Drag to a corner · Tap to swap screens"
                   >
                     <video
                       ref={localVideoRef}
@@ -1475,7 +1680,7 @@ export function CallPanel() {
 
                   <div className="space-y-2">
                     <h3 className="text-2xl font-bold text-white tracking-tight">{call.peer.name}</h3>
-                    <p className="text-sm font-medium text-emerald-400/90"><CallStatusLabel call={call} secondsRef={secondsRef} /></p>
+                    <p className="text-sm font-medium text-emerald-400/90"><CallStatusLabel call={call} secondsRef={secondsRef} quality={callQuality} /></p>
                     <div className="flex items-center justify-center gap-1.5 text-xs text-zinc-400 pt-1">
                       <ShieldCheckIcon className="size-3.5 text-emerald-400" />
                       <span>End-to-end encrypted voice call</span>
@@ -1526,14 +1731,16 @@ export function CallPanel() {
                       {cameraOff ? <VideoOffIcon className="size-5" /> : <VideoIcon className="size-5" />}
                     </Button>
 
-                    <Button
-                      isIconOnly
-                      className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all"
-                      aria-label="Flip camera"
-                      onPress={switchCamera}
-                    >
-                      <RefreshCwIcon className="size-5" />
-                    </Button>
+                    {isMobileDevice() && (
+                      <Button
+                        isIconOnly
+                        className="size-12 sm:size-13 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 transition-all"
+                        aria-label="Flip camera"
+                        onPress={switchCamera}
+                      >
+                        <RefreshCwIcon className="size-5" />
+                      </Button>
+                    )}
 
                     <Button
                       isIconOnly
@@ -1556,27 +1763,30 @@ export function CallPanel() {
                   </>
                 )}
 
-                {/* Speaker output toggle (honest pressed state, not a mute) */}
-                <Button
-                  isIconOnly
-                  className={`size-12 sm:size-13 rounded-full transition-all ${speakerOn ? "bg-emerald-600 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
-                    }`}
-                  aria-label="Speaker"
-                  title="Speaker"
-                  aria-pressed={speakerOn}
-                  onPress={async () => {
-                    if (remoteAudioRef.current?.setSinkId) {
+                {/* Speaker toggle: audio calls on phones only. Switches the remote
+                    audio element between the loudspeaker ("default") and the
+                    earpiece ("communications") output routes. */}
+                {call.type === "audio" && isMobileDevice() && (
+                  <Button
+                    isIconOnly
+                    className={`size-12 sm:size-13 rounded-full transition-all ${speakerOn ? "bg-emerald-600 text-white" : "bg-zinc-800 text-white hover:bg-zinc-700"
+                      }`}
+                    aria-label={speakerOn ? "Switch to earpiece" : "Switch to speaker"}
+                    title={speakerOn ? "Loudspeaker on — tap for earpiece" : "Earpiece — tap for loudspeaker"}
+                    aria-pressed={speakerOn}
+                    onPress={async () => {
+                      const next = !speakerOn;
                       try {
-                        await remoteAudioRef.current.setSinkId(speakerOn ? "communications" : "default");
+                        await remoteAudioRef.current?.setSinkId?.(next ? "default" : "communications");
                       } catch {
-                        /* Device fallback */
+                        /* This device does not expose selectable outputs */
                       }
-                    }
-                    setSpeakerOn((val) => !val);
-                  }}
-                >
-                  <Volume2Icon className="size-5" />
-                </Button>
+                      setSpeakerOn(next);
+                    }}
+                  >
+                    {speakerOn ? <Volume2Icon className="size-5" /> : <Volume1Icon className="size-5" />}
+                  </Button>
+                )}
 
                 {/* End Call Button */}
                 <Button

@@ -13,6 +13,8 @@ import {
     getSharedMedia,
     getFreshMediaUrl,
     uploadMedia,
+    getDisappearing,
+    setDisappearing,
 } from "../controllers/message.controller.js";
 import protectRoute from "../middlewares/auth.middleware.js";
 import { handleUploadError, upload, validateUploadSignature } from "../middlewares/upload.middleware.js";
@@ -25,6 +27,8 @@ router.use(protectRoute);
 
 router.get("/users", rateLimit({ windowMs: 60 * 1000, max: 30 }), getUsersForSidebar);
 router.get("/conversations", getConversationsForSidebar);
+router.get("/disappearing/:id", validateObjectIdParam("id"), getDisappearing);
+router.put("/disappearing/:id", validateObjectIdParam("id"), rateLimit({ windowMs: 60 * 1000, max: 20 }), setDisappearing);
 router.post("/upload", rateLimit({ windowMs: 60 * 1000, max: 20 }), upload.single("media"), handleUploadError, validateUploadSignature, uploadMedia);
 router.get("/media/:id/:type", validateObjectIdParam("id"), getFreshMediaUrl);
 router.get("/:id/media", validateObjectIdParam("id"), getSharedMedia);

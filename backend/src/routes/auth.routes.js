@@ -1,7 +1,7 @@
 import express from "express";
 import protectRoute from "../middlewares/auth.middleware.js";
 import { deleteCallHistory, getCallHistory } from "../controllers/call.controller.js";
-import { checkAuth, login, logout, resendEmailOtp, signup, verifyEmailOtp, forgotPassword, verifyResetOtp, resetPassword, updatePublicKey, getPublicKey } from "../controllers/auth.controller.js";
+import { checkAuth, login, logout, resendEmailOtp, signup, verifyEmailOtp, forgotPassword, verifyResetOtp, resetPassword, updatePublicKey, getPublicKey, getSessions, revokeSession, revokeOtherSessions } from "../controllers/auth.controller.js";
 import { rateLimit, validateObjectIdParam } from "../middlewares/security.middleware.js";
 
 
@@ -17,6 +17,9 @@ router.post("/forgot-password", authLimit, forgotPassword);
 router.post("/verify-reset-otp", authLimit, verifyResetOtp);
 router.post("/reset-password", authLimit, resetPassword);
 router.get("/check", protectRoute, checkAuth)
+router.get("/sessions", protectRoute, getSessions);
+router.delete("/sessions/:id", protectRoute, validateObjectIdParam("id"), revokeSession);
+router.post("/sessions/revoke-others", protectRoute, revokeOtherSessions);
 router.post("/public-key", protectRoute, updatePublicKey);
 router.get("/public-key/:id", protectRoute, validateObjectIdParam("id"), getPublicKey);
 router.get("/calls", protectRoute, getCallHistory);

@@ -6,7 +6,8 @@
   "scripts": {
     "build": "rimraf dist && copyfiles -u 1 \"src/**/*\" dist",
     "dev": "nodemon src/index.js --watch src",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test tests/disappearing.test.js"
   },
   "keywords": [],
   "author": "",

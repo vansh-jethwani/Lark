@@ -5,7 +5,9 @@ import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
 import PendingEmailVerification from "../models/pendingEmailVerification.model.js";
 import PasswordResetOtp from "../models/passwordResetOtp.model.js";
+import Session from "../models/session.model.js";
 import { sendEmailVerificationCode } from "../lib/email.js";
+import { disconnectSessionSockets } from "../lib/socket.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -38,6 +40,14 @@ function serializeUser(user) {
         emailVerified: user.emailVerified === true,
         profilePic: user.profilePic || "",
         publicKey: user.publicKey || "",
+        privacy: {
+            profilePhoto: user.privacy?.profilePhoto || "everyone",
+            readReceipts: user.privacy?.readReceipts !== false,
+        },
+        notificationPrefs: {
+            messageSound: user.notificationPrefs?.messageSound !== false,
+            pushEnabled: user.notificationPrefs?.pushEnabled !== false,
+        },
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
     };
@@ -47,21 +57,46 @@ function normalizeUsername(username) {
     return String(username || "").trim().toLowerCase().replace(/^@+/, "");
 }
 
-function setTokenCookie(res, userId, tokenVersion = 0) {
+function cookieOptions() {
+    // Same-origin Render deployment: "lax" is sufficient and strictly safer
+    // than "none" (which also requires Secure and widens CSRF surface).
+    return {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: MAX_AGE,
+    };
+}
+
+// Clearing must NOT include maxAge: when both Expires and Max-Age are set,
+// browsers honor Max-Age, which would keep the cookie alive instead of
+// deleting it. Express sets Expires to a past date for us.
+function clearCookieOptions() {
+    const { maxAge: _ignored, ...rest } = cookieOptions();
+    return rest;
+}
+
+// Shared with profile.controller: changing your password re-issues the
+// current device's token instead of signing it out too.
+export async function setTokenCookie(req, res, userId, tokenVersion = 0) {
     if (!process.env.JWT_SECRET) {
         throw new Error("JWT_SECRET is not configured");
     }
 
-    const token = jwt.sign({ userId, tokenVersion }, process.env.JWT_SECRET, {
+    // One Session row per login: powers Settings → Active sessions and
+    // per-device revocation. The JWT stays stateless; the middleware rejects
+    // tokens whose session row is missing or revoked.
+    const session = await Session.create({
+        userId,
+        userAgent: String(req.headers?.["user-agent"] || "").slice(0, 300),
+        ip: String(req.headers?.["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "").slice(0, 80),
+    });
+
+    const token = jwt.sign({ userId, tokenVersion, sessionId: String(session._id) }, process.env.JWT_SECRET, {
         expiresIn: "7d",
     });
 
-    res.cookie(COOKIE_NAME, token, {
-        httpOnly: true,
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-        secure: process.env.NODE_ENV === "production",
-        maxAge: MAX_AGE,
-    });
+    res.cookie(COOKIE_NAME, token, cookieOptions());
 }
 
 function createOtp() {
@@ -228,7 +263,7 @@ export async function verifyEmailOtp(req, res) {
             publicKey: initPubKeyBase64,
         });
         await PendingEmailVerification.deleteOne({ _id: pending._id });
-        setTokenCookie(res, user._id, user.tokenVersion);
+        await setTokenCookie(req, res, user._id, user.tokenVersion);
         return res.status(201).json(serializeUser(user));
     } catch (error) {
         console.log("Error in email verification:", error.message);
@@ -281,7 +316,7 @@ export async function login(req, res) {
             return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        setTokenCookie(res, user._id, user.tokenVersion);
+        await setTokenCookie(req, res, user._id, user.tokenVersion);
 
         res.status(200).json(serializeUser(user));
     } catch (error) {
@@ -291,11 +326,23 @@ export async function login(req, res) {
 }
 
 export async function logout(req, res) {
-    res.clearCookie(COOKIE_NAME, {
-        httpOnly: true,
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-        secure: process.env.NODE_ENV === "production",
-    });
+    try {
+        // Best-effort: revoke this device's session row so the token dies
+        // server-side too, not just in the browser cookie jar.
+        const token = req.cookies?.jwt;
+        if (token && process.env.JWT_SECRET) {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            if (decoded?.sessionId) {
+                await Session.updateOne(
+                    { _id: decoded.sessionId, userId: decoded.userId },
+                    { $set: { revoked: true } }
+                );
+            }
+        }
+    } catch {
+        /* logging out must never fail because of session bookkeeping */
+    }
+    res.clearCookie(COOKIE_NAME, clearCookieOptions());
     res.status(200).json({ message: "Logged out" });
 }
 
@@ -305,6 +352,76 @@ export async function checkAuth(req, res) {
     }
 
     res.status(200).json(serializeUser(req.user))
+}
+
+function presentSession(session, currentSessionId) {
+    return {
+        _id: session._id,
+        userAgent: session.userAgent || "",
+        ip: session.ip || "",
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        isCurrent: String(session._id) === String(currentSessionId),
+    };
+}
+
+// Every device currently signed in to this account.
+export async function getSessions(req, res) {
+    try {
+        const sessions = await Session.find({ userId: req.userId, revoked: false })
+            .sort({ updatedAt: -1 })
+            .lean();
+        res.status(200).json(sessions.map((s) => presentSession(s, req.sessionId)));
+    } catch (error) {
+        console.log("Error in getSessions:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+// Revoke one session (a single device). You cannot revoke the session you are
+// using — use logout for that.
+export async function revokeSession(req, res) {
+    try {
+        const { id } = req.params;
+        if (String(id) === String(req.sessionId)) {
+            return res.status(400).json({ message: "You cannot revoke your current session. Use logout instead." });
+        }
+        const result = await Session.updateOne(
+            { _id: id, userId: req.userId, revoked: false },
+            { $set: { revoked: true } }
+        );
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ message: "Session not found." });
+        }
+        // Kick that device's live sockets immediately; its JWT is already dead.
+        disconnectSessionSockets(id);
+        res.status(200).json({ message: "Session revoked." });
+    } catch (error) {
+        console.log("Error in revokeSession:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+// "Log out all other devices": revoke every session except the current one.
+// (Changing your password additionally bumps tokenVersion, which kills even
+// the current session everywhere else.)
+export async function revokeOtherSessions(req, res) {
+    try {
+        const others = await Session.find(
+            { userId: req.userId, revoked: false, _id: { $ne: req.sessionId } },
+            { _id: 1 }
+        ).lean();
+        const result = await Session.updateMany(
+            { userId: req.userId, revoked: false, _id: { $ne: req.sessionId } },
+            { $set: { revoked: true } }
+        );
+        // Kick every other device's live sockets immediately.
+        for (const s of others) disconnectSessionSockets(s._id);
+        res.status(200).json({ message: "Other sessions revoked.", count: result.modifiedCount });
+    } catch (error) {
+        console.log("Error in revokeOtherSessions:", error.message);
+        res.status(500).json({ message: "Internal server error" });
+    }
 }
 
 
@@ -393,14 +510,12 @@ export async function resetPassword(req, res) {
         // invalidates tokens issued before this reset.
         user.tokenVersion = (user.tokenVersion || 0) + 1;
         await user.save();
-        
+        // Keep the sessions list honest: those rows are dead now.
+        await Session.updateMany({ userId: user._id }, { $set: { revoked: true } });
+
         await PasswordResetOtp.deleteOne({ _id: pending._id });
-        
-        res.clearCookie(COOKIE_NAME, {
-            httpOnly: true,
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-            secure: process.env.NODE_ENV === 'production',
-        });
+
+        res.clearCookie(COOKIE_NAME, clearCookieOptions());
         
         return res.status(200).json({ message: 'Password reset successful' });
     } catch (error) {

@@ -23,6 +23,8 @@ import { ForwardMessageModal } from "./ForwardMessageModal";
 import { MediaPreviewModal } from "./MediaPreviewModal";
 import { ReplySnippet } from "./ReplySnippet";
 import { refreshMessageMedia } from "../../lib/media";
+import toast from "react-hot-toast";
+import { useDecryptedMediaUrl } from "../../hooks/useDecryptedMedia";
 import { ReactionSummary } from "./ReactionBar";
 import { SelectionOverlay } from "./SelectionOverlay";
 
@@ -200,7 +202,47 @@ export const MessageBubble = memo(function MessageBubble({
    */
   const hasVisualMedia = hasImage || hasVideo || hasFileThumbnail;
 
+  /*
+   * Group E2EE: encrypted media is stored as ciphertext, so each attachment
+   * is decrypted client-side into a blob URL before display. Plaintext
+   * media returns url: null and falls back to the signed URL.
+   */
+  const encryptedMediaKey = {
+    messageId,
+    groupId: message.groupId,
+    keyVersion: message.keyVersion,
+    mediaIv: message.mediaIv,
+    fileType: message.fileType,
+  };
+  const decryptedImage = useDecryptedMediaUrl({
+    ...encryptedMediaKey,
+    signedUrl: message.imageOriginalUrl || message.imageUrl,
+    mediaType: "image",
+  });
+  const decryptedVideo = useDecryptedMediaUrl({
+    ...encryptedMediaKey,
+    signedUrl: message.videoUrl,
+    mediaType: "video",
+  });
+  const decryptedAudio = useDecryptedMediaUrl({
+    ...encryptedMediaKey,
+    signedUrl: message.audioUrl,
+    mediaType: "audio",
+  });
+  const decryptedFile = useDecryptedMediaUrl({
+    ...encryptedMediaKey,
+    signedUrl: message.fileUrl,
+    mediaType: "file",
+  });
+
   const fileDisplay = getFileDisplayInfo(message.fileType, message.fileName);
+
+  // Encrypted group media must never render/open the raw ciphertext URL —
+  // while decryption is pending (or failed) show a placeholder instead.
+  const encryptedImagePending = decryptedImage.encrypted && !decryptedImage.url;
+  const encryptedVideoPending = decryptedVideo.encrypted && !decryptedVideo.url;
+  const encryptedAudioPending = decryptedAudio.encrypted && !decryptedAudio.url;
+  const encryptedFilePending = decryptedFile.encrypted && !decryptedFile.url;
 
   const FileTypeIcon = fileDisplay.Icon;
 
@@ -221,7 +263,19 @@ export const MessageBubble = memo(function MessageBubble({
     : "";
 
   // Open the file with a fresh signed URL when the stored one has expired.
+  // Encrypted group files open the decrypted blob instead of ciphertext —
+  // never the raw ciphertext URL.
   const openFileUrl = async () => {
+    if (decryptedFile.url) {
+      window.open(decryptedFile.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (decryptedFile.encrypted) {
+      toast.error(
+        decryptedFile.failed ? "Couldn't decrypt this file" : "Decrypting file — try again in a moment"
+      );
+      return;
+    }
     if (!message.fileUrl?.includes("ik-t=")) {
       window.open(message.fileUrl, "_blank", "noopener,noreferrer");
       return;
@@ -268,9 +322,6 @@ export const MessageBubble = memo(function MessageBubble({
 
   const [imageUnavailable, setImageUnavailable] = useState(false);
 
-  const [fileThumbnailUnavailable, setFileThumbnailUnavailable] =
-    useState(false);
-
   /*
    * Initial image URLs.
    *
@@ -304,7 +355,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   const handleDeleteForMe = async () => {
     if (!messageId) {
-      console.log("Message ID missing:", message);
+      // Message ID missing
       return;
     }
 
@@ -314,7 +365,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   const handleDeleteForEveryone = async () => {
     if (!messageId) {
-      console.log("Message ID missing:", message);
+      // Message ID missing
       return;
     }
 
@@ -465,13 +516,26 @@ export const MessageBubble = memo(function MessageBubble({
 
           {/* IMAGE */}
 
-          {hasImage && !imageUnavailable ? (
+          {hasImage && decryptedImage.encrypted && !decryptedImage.url ? (
+            <div className="mb-px flex h-[clamp(12rem,32vw,16rem)] w-[clamp(14rem,42vw,22rem)] max-w-[72vw] items-center justify-center gap-2 rounded-md bg-background/60 px-3 text-center text-xs text-muted-foreground">
+              {decryptedImage.failed ? (
+                "Couldn't decrypt this photo"
+              ) : (
+                <>
+                  <RefreshCwIcon className="size-4 animate-spin" />
+                  Decrypting photo…
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {hasImage && !imageUnavailable && !encryptedImagePending ? (
             <button
               type="button"
               onClick={() =>
                 openMediaPreview({
                   type: "image",
-                  src: message.imageOriginalUrl || imageSrc,
+                  src: decryptedImage.url || message.imageOriginalUrl || imageSrc,
                   messageId,
                   fileName: message.fileName || "Photo",
                 })
@@ -481,7 +545,9 @@ export const MessageBubble = memo(function MessageBubble({
             >
               <img
                 src={
-                  imageThumbnailSrc || withTransform(imageSrc, IMAGE_TRANSFORM)
+                  decryptedImage.url ||
+                  imageThumbnailSrc ||
+                  withTransform(imageSrc, IMAGE_TRANSFORM)
                 }
                 alt=""
                 className="h-[clamp(12rem,32vw,16rem)] w-[clamp(14rem,42vw,22rem)] max-w-[72vw] object-cover"
@@ -502,9 +568,9 @@ export const MessageBubble = memo(function MessageBubble({
             </button>
           ) : null}
 
-          {hasImage && imageUnavailable ? (
+          {hasImage && imageUnavailable && (decryptedImage.url || !decryptedImage.encrypted) ? (
             <a
-              href={message.imageUrl}
+              href={decryptedImage.url || message.imageUrl}
               target="_blank"
               rel="noreferrer"
               className="mb-px block rounded-md bg-background/60 px-1.5 py-1 text-xs text-accent"
@@ -515,14 +581,27 @@ export const MessageBubble = memo(function MessageBubble({
 
           {/* VIDEO */}
 
-          {hasVideo ? (
+          {hasVideo && encryptedVideoPending ? (
+            <div className="mb-px flex h-40 w-[clamp(14rem,42vw,22rem)] max-w-[72vw] items-center justify-center gap-2 rounded-md bg-background/60 px-3 text-center text-xs text-muted-foreground">
+              {decryptedVideo.failed ? (
+                "Couldn't decrypt this video"
+              ) : (
+                <>
+                  <RefreshCwIcon className="size-4 animate-spin" />
+                  Decrypting video…
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {hasVideo && !encryptedVideoPending ? (
             <MessageVideo
-              src={message.videoUrl}
-              thumbnailSrc={message.videoThumbnailUrl}
+              src={decryptedVideo.url || message.videoUrl}
+              thumbnailSrc={decryptedVideo.encrypted ? undefined : message.videoThumbnailUrl}
               onOpen={() =>
                 openMediaPreview({
                   type: "video",
-                  src: message.videoUrl,
+                  src: decryptedVideo.url || message.videoUrl,
                   messageId,
                   fileName: message.fileName || "Video",
                 })
@@ -532,8 +611,25 @@ export const MessageBubble = memo(function MessageBubble({
 
           {/* AUDIO */}
 
-          {hasAudio ? (
-            <MessageAudio src={message.audioUrl} messageId={messageId} isOwnMessage={isOwnMessage} />
+          {hasAudio && encryptedAudioPending ? (
+            <div className="mb-px flex w-[280px] max-w-full items-center gap-2 rounded-2xl bg-background/60 px-4 py-3 text-xs text-muted-foreground">
+              {decryptedAudio.failed ? (
+                "Couldn't decrypt this audio"
+              ) : (
+                <>
+                  <RefreshCwIcon className="size-4 animate-spin" />
+                  Decrypting audio…
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {hasAudio && !encryptedAudioPending ? (
+            <MessageAudio
+              src={decryptedAudio.url || message.audioUrl}
+              messageId={messageId}
+              isOwnMessage={isOwnMessage}
+            />
           ) : null}
 
           {/* FILE / PDF / WORD / EXCEL / PPT */}
@@ -556,7 +652,9 @@ export const MessageBubble = memo(function MessageBubble({
                   : "border border-border bg-background/60 hover:bg-background"
               }`}
             >
-              {message.fileThumbnail ? (
+              {/* Encrypted group files have no server thumbnail (it would be
+                  ciphertext) — show the type tile instead. */}
+              {message.fileThumbnail && !decryptedFile.encrypted ? (
                 <img
                   src={message.fileThumbnail}
                   alt=""
@@ -589,6 +687,9 @@ export const MessageBubble = memo(function MessageBubble({
                   }`}
                 >
                   {[fileSizeLabel, fileDisplay.label].filter(Boolean).join(" \u00b7 ")}
+                  {encryptedFilePending
+                    ? `${[fileSizeLabel, fileDisplay.label].filter(Boolean).length ? " \u00b7 " : ""}${decryptedFile.failed ? "Couldn't decrypt" : "Decrypting…"}`
+                    : ""}
                 </p>
               </div>
 

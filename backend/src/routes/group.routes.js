@@ -5,10 +5,12 @@ import {
   createGroup,
   demoteAdmin,
   getGroupDetails,
+  getMyGroupKey,
   leaveGroup,
   listGroups,
   promoteAdmin,
   removeMember,
+  rotateGroupKey,
   updateGroup,
   updatePermissions,
 } from "../controllers/group.controller.js";
@@ -26,6 +28,8 @@ router.get("/:id/messages", validateObjectIdParam("id"), getGroupMessages);
 router.get("/:id/media", validateObjectIdParam("id"), getGroupMedia);
 router.post("/:id/messages", validateObjectIdParam("id"), rateLimit({ windowMs: 60 * 1000, max: 60, key: (req) => String(req.userId || req.ip) }), upload.single("media"), handleUploadError, validateUploadSignature, sendGroupMessage);
 router.get("/:id", validateObjectIdParam("id"), getGroupDetails);
+router.get("/:id/key", validateObjectIdParam("id"), getMyGroupKey);
+router.put("/:id/key", validateObjectIdParam("id"), rateLimit({ windowMs: 60 * 1000, max: 20 }), rotateGroupKey);
 router.patch("/:id", validateObjectIdParam("id"), updateGroup);
 router.patch("/:id/permissions", validateObjectIdParam("id"), updatePermissions);
 router.post("/:id/members", validateObjectIdParam("id"), rateLimit({ windowMs: 60 * 1000, max: 20 }), addMembers);

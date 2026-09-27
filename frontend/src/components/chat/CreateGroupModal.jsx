@@ -103,7 +103,7 @@ export function CreateGroupModal({ isOpen, onClose }) {
         handleClose();
       }
     } catch (error) {
-      console.log("Create group error:", error);
+      // Create group error
     } finally {
       setIsSubmitting(false);
     }

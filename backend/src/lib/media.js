@@ -2,6 +2,7 @@ import {
   getSignedMediaUrl,
   getSignedPdfThumbnailUrl,
 } from "./imagekit.js";
+import { applyPhotoPrivacy } from "./privacy.js";
 
 const IMAGE_DISPLAY = [{ width: 640, quality: "auto", format: "auto" }];
 const IMAGE_THUMBNAIL = [{ width: 320, height: 320, cropMode: "maintain_ratio", quality: "auto", format: "auto" }];
@@ -41,16 +42,27 @@ export function presentMessageMedia(value) {
   message.audio = toPrivatePath(message.audio);
   message.file = toPrivatePath(message.file);
 
+  // E2EE: when the media bytes are client-encrypted (group keyVersion > 0),
+  // ImageKit transformations cannot run on ciphertext — serve the raw signed
+  // file and let the client decrypt it locally.
+  const encryptedMedia = Number(message.keyVersion) > 0;
+
   if (isPrivatePath(message.image)) {
     const originalImagePath = message.image;
-    message.imageOriginal = signed(originalImagePath);
-    message.image = signed(originalImagePath, IMAGE_DISPLAY);
-    message.imageThumbnail = signed(originalImagePath, IMAGE_THUMBNAIL);
+    if (encryptedMedia) {
+      message.image = signed(originalImagePath);
+    } else {
+      message.imageOriginal = signed(originalImagePath);
+      message.image = signed(originalImagePath, IMAGE_DISPLAY);
+      message.imageThumbnail = signed(originalImagePath, IMAGE_THUMBNAIL);
+    }
   }
   if (isPrivatePath(message.video)) {
     const rawVideoPath = message.video;
     message.video = signed(rawVideoPath);
-    message.videoThumbnail = getSignedMediaUrl(`${rawVideoPath}/ik-thumbnail.jpg`, VIDEO_THUMBNAIL);
+    if (!encryptedMedia) {
+      message.videoThumbnail = getSignedMediaUrl(`${rawVideoPath}/ik-thumbnail.jpg`, VIDEO_THUMBNAIL);
+    }
   }
   if (isPrivatePath(message.audio)) message.audio = signed(message.audio);
   if (isPrivatePath(message.file)) {
@@ -59,14 +71,22 @@ export function presentMessageMedia(value) {
     message.file = signed(originalFilePath);
 
     if (
-      message.fileType === "application/pdf" ||
-      message.fileName?.toLowerCase().endsWith(".pdf")
+      !encryptedMedia &&
+      (
+        message.fileType === "application/pdf" ||
+        message.fileName?.toLowerCase().endsWith(".pdf")
+      )
     ) {
       message.fileThumbnail = getSignedPdfThumbnailUrl(originalFilePath);
     }
   }
   if (message.replyTo && typeof message.replyTo === "object") {
     message.replyTo = presentMessageMedia(message.replyTo);
+  }
+  // Profile-photo privacy: a populated sender who chose "nobody" is shown
+  // without a photo. (The populate must select the `privacy` field.)
+  if (message.senderId && typeof message.senderId === "object") {
+    message.senderId = applyPhotoPrivacy(message.senderId);
   }
   return message;
 }

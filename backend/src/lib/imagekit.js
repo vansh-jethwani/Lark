@@ -31,6 +31,11 @@ async function uploadChatMedia(file) {
   return { filePath: result.filePath, fileId: result.fileId };
 }
 
+async function deleteChatMedia(fileId) {
+  if (!fileId || !hasImagekitConfig()) return;
+  await imagekit.files.delete(fileId);
+}
+
 function getSignedMediaUrl(filePath, transformation) {
   if (!filePath) return "";
 
@@ -66,6 +71,7 @@ function getSignedPdfThumbnailUrl(filePath) {
 
 export {
   uploadChatMedia,
+  deleteChatMedia,
   hasImagekitConfig,
   getSignedMediaUrl,
   getSignedPdfThumbnailUrl,

@@ -91,7 +91,14 @@ export function ChatHeader() {
               {activeConversation.peer.name}
             </p>
             <p className="truncate text-xs text-muted">
-              {activeConversation.peer.isOnline ? (
+              {activeConversation.isGroup ? (
+                <span
+                  title="Messages in this group are end-to-end encrypted. Only members can read them."
+                  className="font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  End-to-end encrypted
+                </span>
+              ) : activeConversation.peer.isOnline ? (
                 <span className="font-medium text-success">Online</span>
               ) : (
                 "Offline"
